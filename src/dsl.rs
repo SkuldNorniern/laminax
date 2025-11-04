@@ -3,7 +3,7 @@
 //! The DSL provides ergonomic Rust syntax for tensor/array computations
 //! that can be lowered to optimized LCIR kernels.
 
-use crate::lcir::{BinaryOp, KernelBuilder, MemoryScope, TensorId, UnaryOp, access, index};
+use crate::lcir::{BinaryOp, KernelBuilder, LoopId, MemoryScope, TensorId, UnaryOp, access, index};
 use crate::{DType, LaminaxError, Result, Shape, Tensor};
 
 /// Core trait for DSL expressions that can be evaluated
@@ -229,20 +229,14 @@ impl DSLExpr for BinaryExpr {
     fn eval(&self) -> Result<Tensor> {
         // Direct evaluation using numina operations
         match self.op {
-            BinaryOpType::Add => self
-                .lhs
-                .add(&self.rhs)
-                .map_err(LaminaxError::InvalidOperation),
+            BinaryOpType::Add => self.lhs.add(&self.rhs).map_err(|e| LaminaxError::InvalidOperation(e)),
             BinaryOpType::Sub => {
                 // TODO: Implement subtraction in Tensor
                 Err(LaminaxError::InvalidOperation(
                     "Subtraction not yet implemented".to_string(),
                 ))
             }
-            BinaryOpType::Mul => self
-                .lhs
-                .mul(&self.rhs)
-                .map_err(LaminaxError::InvalidOperation),
+            BinaryOpType::Mul => self.lhs.mul(&self.rhs).map_err(|e| LaminaxError::InvalidOperation(e)),
             BinaryOpType::Div => {
                 // TODO: Implement division in Tensor
                 Err(LaminaxError::InvalidOperation(
@@ -300,22 +294,10 @@ impl DSLExpr for UnaryExpr {
     fn eval(&self) -> Result<Tensor> {
         // Direct evaluation using numina operations
         match self.op {
-            UnaryOpType::Exp => self
-                .input
-                .exp()
-                .map_err(LaminaxError::InvalidOperation),
-            UnaryOpType::Log => self
-                .input
-                .log()
-                .map_err(LaminaxError::InvalidOperation),
-            UnaryOpType::Sqrt => self
-                .input
-                .sqrt()
-                .map_err(LaminaxError::InvalidOperation),
-            _ => Err(LaminaxError::InvalidOperation(format!(
-                "Unary operation {:?} not implemented",
-                self.op
-            ))),
+            UnaryOpType::Exp => self.input.exp().map_err(|e| LaminaxError::InvalidOperation(e)),
+            UnaryOpType::Log => self.input.log().map_err(|e| LaminaxError::InvalidOperation(e)),
+            UnaryOpType::Sqrt => self.input.sqrt().map_err(|e| LaminaxError::InvalidOperation(e)),
+            _ => Err(LaminaxError::InvalidOperation(format!("Unary operation {:?} not implemented", self.op))),
         }
     }
 }
