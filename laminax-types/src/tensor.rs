@@ -104,6 +104,53 @@ impl Tensor {
         self.storage.strides()
     }
 
+    /// Extract tensor data as f32 vector (for debugging/verification)
+    /// This is a convenience method for small tensors - not efficient for large ones
+    pub fn to_vec_f32(&self) -> Result<Vec<f32>, String> {
+        if self.dtype() != crate::F32 {
+            return Err(format!("to_vec_f32 only supported for F32 tensors, got {:?}", self.dtype()));
+        }
+
+        let byte_len = self.len() * 4; // f32 = 4 bytes
+        if byte_len != self.storage.byte_len() {
+            return Err("Byte length mismatch".to_string());
+        }
+
+        let mut result = vec![0.0f32; self.len()];
+        unsafe {
+            let bytes = self.storage.as_bytes();
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                result.as_mut_ptr() as *mut u8,
+                byte_len,
+            );
+        }
+        Ok(result)
+    }
+
+    /// Set tensor data from f32 slice (for testing/computation results)
+    /// This is a temporary method until proper tensor mutation API is implemented
+    pub fn set_from_f32_slice(&mut self, data: &[f32]) -> Result<(), String> {
+        if self.dtype() != crate::F32 {
+            return Err(format!("set_from_f32_slice only supported for F32 tensors, got {:?}", self.dtype()));
+        }
+
+        if data.len() != self.len() {
+            return Err(format!("Data length {} does not match tensor length {}", data.len(), self.len()));
+        }
+
+        let byte_len = data.len() * 4; // f32 = 4 bytes
+        unsafe {
+            let dest_bytes = self.storage.as_mut_bytes();
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr() as *const u8,
+                dest_bytes.as_mut_ptr(),
+                byte_len,
+            );
+        }
+        Ok(())
+    }
+
     /// Create a tensor from any NdArray implementation
     pub fn from_ndarray(array: Box<dyn NdArray>) -> Self {
         Tensor { storage: array }
