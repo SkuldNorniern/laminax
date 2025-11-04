@@ -12,13 +12,10 @@ pub use laminax_types::*; // Tensor API and types
 
 // Re-export from numina (excluding matmul which conflicts with DSL version)
 pub use numina::{
-    Array, CpuBytesArray, DType, NdArray, Shape, Strides,
-    abs, acos, add, add_scalar, asin, atan, cos, exp, log, mul, pow, sign, sin, sqrt, tan,
-    max, mean, min, prod, sum,
-    argsort, sort, where_condition,
-    BFloat16, QuantizedI4, QuantizedU8,
-    DTypeCandidate, DTypeLike,
-    F32, F64, I8, I16, I32, I64, U8, U16, U32, U64, Bool,
+    Array, BFloat16, Bool, CpuBytesArray, DType, DTypeCandidate, DTypeLike, F32, F64, I8, I16, I32,
+    I64, NdArray, QuantizedI4, QuantizedU8, Shape, Strides, U8, U16, U32, U64, abs, acos, add,
+    add_scalar, argsort, asin, atan, cos, exp, log, max, mean, min, mul, pow, prod, sign, sin,
+    sort, sqrt, sum, tan, where_condition,
 };
 
 // Re-export DSL items

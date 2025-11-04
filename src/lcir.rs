@@ -6,8 +6,8 @@
 //! - Synchronization barriers
 //! - Memory access patterns
 
+use crate::{DType, Shape};
 use std::collections::HashMap;
-use crate::{Shape, DType};
 
 /// Unique identifier for tensors in LCIR
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -163,7 +163,13 @@ impl KernelBuilder {
     }
 
     /// Add a tensor to the kernel
-    pub fn add_tensor(&mut self, name: impl Into<String>, shape: Shape, dtype: DType, scope: MemoryScope) -> TensorId {
+    pub fn add_tensor(
+        &mut self,
+        name: impl Into<String>,
+        shape: Shape,
+        dtype: DType,
+        scope: MemoryScope,
+    ) -> TensorId {
         let id = TensorId(self.next_tensor_id);
         self.next_tensor_id += 1;
 
@@ -221,8 +227,19 @@ impl KernelBuilder {
     }
 
     /// Add a binary operation
-    pub fn add_binary_op(&mut self, result: TensorAccess, lhs: TensorAccess, op: BinaryOp, rhs: TensorAccess) {
-        self.operations.push(Operation::Binary { result, lhs, op, rhs });
+    pub fn add_binary_op(
+        &mut self,
+        result: TensorAccess,
+        lhs: TensorAccess,
+        op: BinaryOp,
+        rhs: TensorAccess,
+    ) {
+        self.operations.push(Operation::Binary {
+            result,
+            lhs,
+            op,
+            rhs,
+        });
     }
 
     /// Add a unary operation
@@ -295,7 +312,11 @@ pub mod index {
 pub mod access {
     use super::*;
 
-    pub fn tensor(tensor_id: TensorId, indices: Vec<IndexExpr>, scope: MemoryScope) -> TensorAccess {
+    pub fn tensor(
+        tensor_id: TensorId,
+        indices: Vec<IndexExpr>,
+        scope: MemoryScope,
+    ) -> TensorAccess {
         TensorAccess {
             tensor_id,
             indices,

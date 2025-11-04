@@ -3,8 +3,8 @@
 //! The DSL provides ergonomic Rust syntax for tensor/array computations
 //! that can be lowered to optimized LCIR kernels.
 
-use crate::lcir::{KernelBuilder, MemoryScope, BinaryOp, UnaryOp, LoopId, TensorId, index, access};
-use crate::{Tensor, Shape, DType, Result, LaminaxError};
+use crate::lcir::{BinaryOp, KernelBuilder, MemoryScope, TensorId, UnaryOp, access, index};
+use crate::{DType, LaminaxError, Result, Shape, Tensor};
 
 /// Core trait for DSL expressions that can be evaluated
 pub trait DSLExpr {
@@ -83,9 +83,10 @@ impl Computation {
     /// Execute via LCIR lowering (future implementation)
     fn run_via_lcir(self) -> Result<Tensor> {
         // TODO: Implement full LCIR → Lamina IR → execution pipeline
-        Err(LaminaxError::InvalidOperation("LCIR execution not yet implemented".to_string()))
+        Err(LaminaxError::InvalidOperation(
+            "LCIR execution not yet implemented".to_string(),
+        ))
     }
-
 }
 
 // ============================================================================
@@ -152,7 +153,7 @@ impl DSLExpr for Tensor {
             "input",
             self.shape().clone(),
             self.dtype(),
-            MemoryScope::Global
+            MemoryScope::Global,
         );
         // TODO: Add load operation
         Ok(())
@@ -167,24 +168,42 @@ impl DSLExpr for Tensor {
 impl DSLExpr for BinaryExpr {
     fn shape(&self) -> &Shape {
         // For element-wise operations, result shape must match both inputs
-        assert_eq!(self.lhs.shape(), self.rhs.shape(), "Binary operation requires matching shapes");
+        assert_eq!(
+            self.lhs.shape(),
+            self.rhs.shape(),
+            "Binary operation requires matching shapes"
+        );
         self.lhs.shape()
     }
 
     fn dtype(&self) -> DType {
         // Assume both operands have the same dtype
-        assert_eq!(self.lhs.dtype(), self.rhs.dtype(), "Binary operation requires matching dtypes");
+        assert_eq!(
+            self.lhs.dtype(),
+            self.rhs.dtype(),
+            "Binary operation requires matching dtypes"
+        );
         self.lhs.dtype()
     }
 
     fn lower_to_lcir(&self, builder: &mut KernelBuilder, result_tensor: TensorId) -> Result<()> {
-        let lhs_id = builder.add_tensor("lhs", self.lhs.shape().clone(), self.lhs.dtype(), MemoryScope::Global);
-        let rhs_id = builder.add_tensor("rhs", self.rhs.shape().clone(), self.rhs.dtype(), MemoryScope::Global);
+        let lhs_id = builder.add_tensor(
+            "lhs",
+            self.lhs.shape().clone(),
+            self.lhs.dtype(),
+            MemoryScope::Global,
+        );
+        let rhs_id = builder.add_tensor(
+            "rhs",
+            self.rhs.shape().clone(),
+            self.rhs.dtype(),
+            MemoryScope::Global,
+        );
 
         // Add loops for all dimensions
         let mut loop_ids = Vec::new();
         for (i, &dim) in self.lhs.shape().dims().iter().enumerate() {
-            let loop_id = builder.add_loop(&format!("i{}", i), 0, dim as i64, 1);
+            let loop_id = builder.add_loop(format!("i{}", i), 0, dim as i64, 1);
             loop_ids.push(loop_id);
         }
 
@@ -210,15 +229,25 @@ impl DSLExpr for BinaryExpr {
     fn eval(&self) -> Result<Tensor> {
         // Direct evaluation using numina operations
         match self.op {
-            BinaryOpType::Add => self.lhs.add(&self.rhs).map_err(|e| LaminaxError::InvalidOperation(e)),
+            BinaryOpType::Add => self
+                .lhs
+                .add(&self.rhs)
+                .map_err(LaminaxError::InvalidOperation),
             BinaryOpType::Sub => {
                 // TODO: Implement subtraction in Tensor
-                Err(LaminaxError::InvalidOperation("Subtraction not yet implemented".to_string()))
+                Err(LaminaxError::InvalidOperation(
+                    "Subtraction not yet implemented".to_string(),
+                ))
             }
-            BinaryOpType::Mul => self.lhs.mul(&self.rhs).map_err(|e| LaminaxError::InvalidOperation(e)),
+            BinaryOpType::Mul => self
+                .lhs
+                .mul(&self.rhs)
+                .map_err(LaminaxError::InvalidOperation),
             BinaryOpType::Div => {
                 // TODO: Implement division in Tensor
-                Err(LaminaxError::InvalidOperation("Division not yet implemented".to_string()))
+                Err(LaminaxError::InvalidOperation(
+                    "Division not yet implemented".to_string(),
+                ))
             }
         }
     }
@@ -234,12 +263,17 @@ impl DSLExpr for UnaryExpr {
     }
 
     fn lower_to_lcir(&self, builder: &mut KernelBuilder, result_tensor: TensorId) -> Result<()> {
-        let input_id = builder.add_tensor("input", self.input.shape().clone(), self.input.dtype(), MemoryScope::Global);
+        let input_id = builder.add_tensor(
+            "input",
+            self.input.shape().clone(),
+            self.input.dtype(),
+            MemoryScope::Global,
+        );
 
         // Add loops for all dimensions
         let mut loop_ids = Vec::new();
         for (i, &dim) in self.input.shape().dims().iter().enumerate() {
-            let loop_id = builder.add_loop(&format!("i{}", i), 0, dim as i64, 1);
+            let loop_id = builder.add_loop(format!("i{}", i), 0, dim as i64, 1);
             loop_ids.push(loop_id);
         }
 
@@ -266,10 +300,22 @@ impl DSLExpr for UnaryExpr {
     fn eval(&self) -> Result<Tensor> {
         // Direct evaluation using numina operations
         match self.op {
-            UnaryOpType::Exp => self.input.exp().map_err(|e| LaminaxError::InvalidOperation(e)),
-            UnaryOpType::Log => self.input.log().map_err(|e| LaminaxError::InvalidOperation(e)),
-            UnaryOpType::Sqrt => self.input.sqrt().map_err(|e| LaminaxError::InvalidOperation(e)),
-            _ => Err(LaminaxError::InvalidOperation(format!("Unary operation {:?} not implemented", self.op))),
+            UnaryOpType::Exp => self
+                .input
+                .exp()
+                .map_err(LaminaxError::InvalidOperation),
+            UnaryOpType::Log => self
+                .input
+                .log()
+                .map_err(LaminaxError::InvalidOperation),
+            UnaryOpType::Sqrt => self
+                .input
+                .sqrt()
+                .map_err(LaminaxError::InvalidOperation),
+            _ => Err(LaminaxError::InvalidOperation(format!(
+                "Unary operation {:?} not implemented",
+                self.op
+            ))),
         }
     }
 }
@@ -280,13 +326,27 @@ impl DSLExpr for MatMulExpr {
     }
 
     fn dtype(&self) -> DType {
-        assert_eq!(self.lhs.dtype(), self.rhs.dtype(), "Matrix multiplication requires matching dtypes");
+        assert_eq!(
+            self.lhs.dtype(),
+            self.rhs.dtype(),
+            "Matrix multiplication requires matching dtypes"
+        );
         self.lhs.dtype()
     }
 
     fn lower_to_lcir(&self, builder: &mut KernelBuilder, result_tensor: TensorId) -> Result<()> {
-        let lhs_id = builder.add_tensor("lhs", self.lhs.shape().clone(), self.lhs.dtype(), MemoryScope::Global);
-        let rhs_id = builder.add_tensor("rhs", self.rhs.shape().clone(), self.rhs.dtype(), MemoryScope::Global);
+        let lhs_id = builder.add_tensor(
+            "lhs",
+            self.lhs.shape().clone(),
+            self.lhs.dtype(),
+            MemoryScope::Global,
+        );
+        let rhs_id = builder.add_tensor(
+            "rhs",
+            self.rhs.shape().clone(),
+            self.rhs.dtype(),
+            MemoryScope::Global,
+        );
 
         let lhs_dims = self.lhs.shape().dims();
         let rhs_dims = self.rhs.shape().dims();
@@ -297,9 +357,21 @@ impl DSLExpr for MatMulExpr {
         let k_loop = builder.add_loop("k", 0, lhs_dims[1] as i64, 1);
 
         // Create tensor accesses
-        let lhs_access = access::tensor(lhs_id, vec![index::loop_var(i_loop), index::loop_var(k_loop)], MemoryScope::Global);
-        let rhs_access = access::tensor(rhs_id, vec![index::loop_var(k_loop), index::loop_var(j_loop)], MemoryScope::Global);
-        let result_access = access::tensor(result_tensor, vec![index::loop_var(i_loop), index::loop_var(j_loop)], MemoryScope::Global);
+        let lhs_access = access::tensor(
+            lhs_id,
+            vec![index::loop_var(i_loop), index::loop_var(k_loop)],
+            MemoryScope::Global,
+        );
+        let rhs_access = access::tensor(
+            rhs_id,
+            vec![index::loop_var(k_loop), index::loop_var(j_loop)],
+            MemoryScope::Global,
+        );
+        let result_access = access::tensor(
+            result_tensor,
+            vec![index::loop_var(i_loop), index::loop_var(j_loop)],
+            MemoryScope::Global,
+        );
 
         // Add multiplication and accumulation
         builder.add_binary_op(result_access.clone(), lhs_access, BinaryOp::Mul, rhs_access);
@@ -313,8 +385,8 @@ impl DSLExpr for MatMulExpr {
     fn eval(&self) -> Result<Tensor> {
         // Use laminax matmul function
         crate::matmul(&self.lhs, &self.rhs)
-            .map_err(|e| LaminaxError::InvalidOperation(e))
-            .map(|result| Tensor::from_ndarray(result))
+            .map_err(LaminaxError::InvalidOperation)
+            .map(Tensor::from_ndarray)
     }
 }
 
@@ -423,21 +495,13 @@ impl TensorDSL for Tensor {
 
 /// Scheduling transformations for optimization
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct Schedule {
     pub tiles: Vec<(usize, usize)>, // (axis, size)
     pub parallel_axes: Vec<usize>,
     pub vectorized_axes: Vec<usize>,
 }
 
-impl Default for Schedule {
-    fn default() -> Self {
-        Self {
-            tiles: Vec::new(),
-            parallel_axes: Vec::new(),
-            vectorized_axes: Vec::new(),
-        }
-    }
-}
 
 impl Schedule {
     /// Create a new schedule
@@ -543,9 +607,7 @@ mod tests {
         let b = Tensor::from_slice(&[3.0f32, 4.0], Shape::from([2]));
 
         // Test scheduling
-        let computation = a.dsl_add(b)
-            .parallelize(0)
-            .vectorize(0);
+        let computation = a.dsl_add(b).parallelize(0).vectorize(0);
 
         assert_eq!(computation.schedule.parallel_axes, vec![0]);
         assert_eq!(computation.schedule.vectorized_axes, vec![0]);
