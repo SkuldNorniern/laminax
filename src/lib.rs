@@ -9,18 +9,20 @@ pub mod lcir;
 
 // Re-export everything from our foundation crates for unified API
 pub use laminax_types::*; // Tensor API and types
-pub use numina::*; // Backend-agnostic arrays and operations
 
-// Re-export commonly used items at top level
-pub use {
-    Tensor, Array, CpuBytesArray, NdArray,
-    Shape, DType, Strides,
-    add, mul, sum, mean, max, min, prod,
-    F32, F64,
+// Re-export from numina (excluding matmul which conflicts with DSL version)
+pub use numina::{
+    Array, CpuBytesArray, DType, NdArray, Shape, Strides,
+    abs, acos, add, add_scalar, asin, atan, cos, exp, log, mul, pow, sign, sin, sqrt, tan,
+    max, mean, min, prod, sum,
+    argsort, sort, where_condition,
+    BFloat16, QuantizedI4, QuantizedU8,
+    DTypeCandidate, DTypeLike,
+    F32, F64, I8, I16, I32, I64, U8, U16, U32, U64, Bool,
 };
 
 // Re-export DSL items
-pub use dsl::{Computation, Schedule, matmul};
+pub use dsl::{Computation, Schedule};
 
 // Error types for Laminax operations
 #[derive(Debug, Clone, PartialEq)]
