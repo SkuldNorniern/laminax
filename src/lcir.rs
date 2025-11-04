@@ -245,6 +245,11 @@ impl KernelBuilder {
         self.operations.push(Operation::Barrier);
     }
 
+    /// Get mutable access to loops for scheduling
+    pub fn loops_mut(&mut self) -> &mut Vec<Loop> {
+        &mut self.loops
+    }
+
     /// Build the kernel
     pub fn build(self) -> Kernel {
         Kernel {

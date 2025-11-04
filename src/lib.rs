@@ -4,6 +4,7 @@
 //! while giving fine-grained control over execution through scheduling primitives.
 //! It compiles to optimized machine code via Lamina IR for CPU and CUDA/HIP for GPU.
 
+pub mod dsl;
 pub mod lcir;
 
 // Re-export everything from our foundation crates for unified API
@@ -14,9 +15,12 @@ pub use numina::*; // Backend-agnostic arrays and operations
 pub use {
     Tensor, Array, CpuBytesArray, NdArray,
     Shape, DType, Strides,
-    add, mul, matmul, sum, mean, max, min, prod,
+    add, mul, sum, mean, max, min, prod,
     F32, F64,
 };
+
+// Re-export DSL items
+pub use dsl::{Computation, Schedule, matmul};
 
 // Error types for Laminax operations
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +54,7 @@ impl std::fmt::Display for LaminaxError {
 
 impl std::error::Error for LaminaxError {}
 
+pub type Result<T> = std::result::Result<T, LaminaxError>;
 
 #[cfg(test)]
 mod tests {
