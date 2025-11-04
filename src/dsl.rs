@@ -130,6 +130,7 @@ pub enum UnaryOpType {
 pub struct MatMulExpr {
     pub lhs: Tensor,
     pub rhs: Tensor,
+    result_shape: Shape,
 }
 
 // ============================================================================
@@ -275,10 +276,7 @@ impl DSLExpr for UnaryExpr {
 
 impl DSLExpr for MatMulExpr {
     fn shape(&self) -> &Shape {
-        // Matrix multiplication: (m,k) x (k,n) -> (m,n)
-        // For now, store the computed shape - this is not ideal but works for the demo
-        // TODO: Pre-compute shape in constructor
-        panic!("MatMulExpr shape() not implemented yet - use eval() instead")
+        &self.result_shape
     }
 
     fn dtype(&self) -> DType {
@@ -382,9 +380,14 @@ impl TensorDSL for Tensor {
     }
 
     fn dsl_matmul(self, rhs: Tensor) -> Computation {
+        let lhs_dims = self.shape().dims();
+        let rhs_dims = rhs.shape().dims();
+        let result_shape = Shape::from([lhs_dims[0], rhs_dims[1]]);
+
         let expr = MatMulExpr {
             lhs: self,
             rhs,
+            result_shape,
         };
         Computation::new(Box::new(expr))
     }
