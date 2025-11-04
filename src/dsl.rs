@@ -229,14 +229,20 @@ impl DSLExpr for BinaryExpr {
     fn eval(&self) -> Result<Tensor> {
         // Direct evaluation using numina operations
         match self.op {
-            BinaryOpType::Add => self.lhs.add(&self.rhs).map_err(|e| LaminaxError::InvalidOperation(e)),
+            BinaryOpType::Add => self
+                .lhs
+                .add(&self.rhs)
+                .map_err(|e| LaminaxError::InvalidOperation(e)),
             BinaryOpType::Sub => {
                 // TODO: Implement subtraction in Tensor
                 Err(LaminaxError::InvalidOperation(
                     "Subtraction not yet implemented".to_string(),
                 ))
             }
-            BinaryOpType::Mul => self.lhs.mul(&self.rhs).map_err(|e| LaminaxError::InvalidOperation(e)),
+            BinaryOpType::Mul => self
+                .lhs
+                .mul(&self.rhs)
+                .map_err(|e| LaminaxError::InvalidOperation(e)),
             BinaryOpType::Div => {
                 // TODO: Implement division in Tensor
                 Err(LaminaxError::InvalidOperation(
@@ -294,10 +300,22 @@ impl DSLExpr for UnaryExpr {
     fn eval(&self) -> Result<Tensor> {
         // Direct evaluation using numina operations
         match self.op {
-            UnaryOpType::Exp => self.input.exp().map_err(|e| LaminaxError::InvalidOperation(e)),
-            UnaryOpType::Log => self.input.log().map_err(|e| LaminaxError::InvalidOperation(e)),
-            UnaryOpType::Sqrt => self.input.sqrt().map_err(|e| LaminaxError::InvalidOperation(e)),
-            _ => Err(LaminaxError::InvalidOperation(format!("Unary operation {:?} not implemented", self.op))),
+            UnaryOpType::Exp => self
+                .input
+                .exp()
+                .map_err(|e| LaminaxError::InvalidOperation(e)),
+            UnaryOpType::Log => self
+                .input
+                .log()
+                .map_err(|e| LaminaxError::InvalidOperation(e)),
+            UnaryOpType::Sqrt => self
+                .input
+                .sqrt()
+                .map_err(|e| LaminaxError::InvalidOperation(e)),
+            _ => Err(LaminaxError::InvalidOperation(format!(
+                "Unary operation {:?} not implemented",
+                self.op
+            ))),
         }
     }
 }
@@ -476,14 +494,12 @@ impl TensorDSL for Tensor {
 // ============================================================================
 
 /// Scheduling transformations for optimization
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Schedule {
     pub tiles: Vec<(usize, usize)>, // (axis, size)
     pub parallel_axes: Vec<usize>,
     pub vectorized_axes: Vec<usize>,
 }
-
 
 impl Schedule {
     /// Create a new schedule
