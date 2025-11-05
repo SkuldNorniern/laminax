@@ -58,21 +58,39 @@ pub type Result<T> = std::result::Result<T, LaminaxError>;
 // Test backend factory for lib tests
 #[cfg(test)]
 fn lib_test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn NdArray> {
-    struct LibTestArray { data: Vec<u8>, shape: Shape, dtype: DType }
+    struct LibTestArray {
+        data: Vec<u8>,
+        shape: Shape,
+        dtype: DType,
+    }
     impl std::fmt::Debug for LibTestArray {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "LibTestArray{{ shape: {:?}, dtype: {:?} }}", self.shape, self.dtype)
+            write!(
+                f,
+                "LibTestArray{{ shape: {:?}, dtype: {:?} }}",
+                self.shape, self.dtype
+            )
         }
     }
     impl NdArray for LibTestArray {
-        fn shape(&self) -> &Shape { &self.shape }
+        fn shape(&self) -> &Shape {
+            &self.shape
+        }
         fn strides(&self) -> &Strides {
             panic!("strides not implemented for test backend")
         }
-        fn len(&self) -> usize { self.shape.len() }
-        fn dtype(&self) -> DType { self.dtype }
-        unsafe fn as_bytes(&self) -> &[u8] { &self.data }
-        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { unimplemented!() }
+        fn len(&self) -> usize {
+            self.shape.len()
+        }
+        fn dtype(&self) -> DType {
+            self.dtype
+        }
+        unsafe fn as_bytes(&self) -> &[u8] {
+            &self.data
+        }
+        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
+            unimplemented!()
+        }
         fn clone_array(&self) -> Box<dyn NdArray> {
             Box::new(LibTestArray {
                 data: self.data.clone(),
@@ -80,11 +98,21 @@ fn lib_test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dy
                 dtype: self.dtype,
             })
         }
-        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
+        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
     }
     Box::new(LibTestArray { data, shape, dtype })
 }
@@ -98,32 +126,63 @@ mod tests {
         // Test that our re-exports work
         let shape = Shape::from([2, 2]);
         let tensor = Tensor::zeros(F32, shape.clone(), |dtype, shape| {
-            struct TestArray { shape: Shape, dtype: DType }
+            struct TestArray {
+                shape: Shape,
+                dtype: DType,
+            }
             impl std::fmt::Debug for TestArray {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    write!(f, "TestArray{{ shape: {:?}, dtype: {:?} }}", self.shape, self.dtype)
+                    write!(
+                        f,
+                        "TestArray{{ shape: {:?}, dtype: {:?} }}",
+                        self.shape, self.dtype
+                    )
                 }
             }
             impl NdArray for TestArray {
-                fn shape(&self) -> &Shape { &self.shape }
+                fn shape(&self) -> &Shape {
+                    &self.shape
+                }
                 fn strides(&self) -> &Strides {
                     panic!("strides not implemented for test backend")
                 }
-                fn len(&self) -> usize { self.shape.len() }
-                fn dtype(&self) -> DType { self.dtype }
-                unsafe fn as_bytes(&self) -> &[u8] { unimplemented!() }
-                unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { unimplemented!() }
+                fn len(&self) -> usize {
+                    self.shape.len()
+                }
+                fn dtype(&self) -> DType {
+                    self.dtype
+                }
+                unsafe fn as_bytes(&self) -> &[u8] {
+                    unimplemented!()
+                }
+                unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
+                    unimplemented!()
+                }
                 fn clone_array(&self) -> Box<dyn NdArray> {
                     Box::new(TestArray {
                         shape: self.shape.clone(),
                         dtype: self.dtype,
                     })
                 }
-                fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-                fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-                fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-                fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-                fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
+                fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+                    unimplemented!()
+                }
+                fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> {
+                    unimplemented!()
+                }
+                fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+                    unimplemented!()
+                }
+                fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+                    unimplemented!()
+                }
+                fn new_array(
+                    &self,
+                    _: Shape,
+                    _: DType,
+                ) -> std::result::Result<Box<dyn NdArray>, String> {
+                    unimplemented!()
+                }
             }
             Box::new(TestArray { shape, dtype })
         });
