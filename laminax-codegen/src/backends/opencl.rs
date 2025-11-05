@@ -13,7 +13,9 @@ impl OpenClBackend {
 
     /// Compile OpenCL kernel source
     pub fn compile_kernel(&self, _source: &str) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("OpenCL kernel compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "OpenCL kernel compilation not yet implemented",
+        ))
     }
 
     /// Compile from LCIR to OpenCL kernel

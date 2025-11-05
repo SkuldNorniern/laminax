@@ -13,7 +13,9 @@ impl CudaBackend {
 
     /// Compile CUDA/HIP kernel source
     pub fn compile_kernel(&self, _source: &str) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("CUDA kernel compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "CUDA kernel compilation not yet implemented",
+        ))
     }
 
     /// Compile from LCIR to CUDA/HIP kernel

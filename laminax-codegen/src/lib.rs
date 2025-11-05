@@ -31,9 +31,9 @@
 
 // Core modules
 pub mod backends;
-pub mod lowering;
-pub mod compilation;
 pub mod common;
+pub mod compilation;
+pub mod lowering;
 
 // Re-export key traits
 pub use compilation::Compiler;
@@ -95,11 +95,13 @@ pub fn compile_lamina_ir(ir: &str, backend: Backend) -> Result<Vec<u8>> {
         }
         Backend::Metal => {
             // This is a placeholder - real implementation would parse IR
-            Err(CodegenError::NotImplemented("Metal compilation from Lamina IR not yet implemented"))
+            Err(CodegenError::NotImplemented(
+                "Metal compilation from Lamina IR not yet implemented",
+            ))
         }
-        Backend::AppleNpu => {
-            Err(CodegenError::NotImplemented("Apple NPU compilation from Lamina IR not yet implemented"))
-        }
+        Backend::AppleNpu => Err(CodegenError::NotImplemented(
+            "Apple NPU compilation from Lamina IR not yet implemented",
+        )),
     }
 }
 
@@ -126,5 +128,3 @@ pub fn compile_from_lcir(kernel: &laminax::lcir::Kernel, backend: Backend) -> Re
         }
     }
 }
-
-

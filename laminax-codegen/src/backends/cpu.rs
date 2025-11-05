@@ -1,7 +1,7 @@
 //! CPU backend using Lamina IR compiler.
 
-use crate::backends::{Backend, BackendCapabilities};
 use crate::Result;
+use crate::backends::{Backend, BackendCapabilities};
 
 /// CPU backend implementation
 pub struct CpuBackend;
@@ -47,5 +47,3 @@ impl Backend for CpuBackend {
         "CPU"
     }
 }
-
-

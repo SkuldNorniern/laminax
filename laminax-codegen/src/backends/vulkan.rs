@@ -13,7 +13,9 @@ impl VulkanBackend {
 
     /// Compile SPIR-V shader
     pub fn compile_spirv(&self, _spirv_bytes: &[u8]) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("SPIR-V compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "SPIR-V compilation not yet implemented",
+        ))
     }
 
     /// Compile from LCIR to SPIR-V
@@ -26,7 +28,7 @@ impl VulkanBackend {
 impl Backend for VulkanBackend {
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
-            supports_fp64: true,  // Vulkan supports FP64
+            supports_fp64: true, // Vulkan supports FP64
             supports_fp16: true,
             supports_int64: true,
             supports_int16: true,

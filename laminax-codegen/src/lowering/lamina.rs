@@ -24,8 +24,10 @@ impl LowerToTarget for LaminaLowerer {
 
 use std::collections::HashMap;
 
-use lamina::ir::{BinaryOp as LaminaBinOp, CmpOp, FunctionParameter, IRBuilder, PrimitiveType, Type};
 use lamina::ir::builder::{i64 as lit_i64, var};
+use lamina::ir::{
+    BinaryOp as LaminaBinOp, CmpOp, FunctionParameter, IRBuilder, PrimitiveType, Type,
+};
 use laminax::lcir::{BinaryOp as LcBinaryOp, Kernel, MemoryScope, Operation, TensorAccess};
 use laminax::{DType, Shape};
 
@@ -135,13 +137,11 @@ impl<'a> ModuleCtx<'a> {
         self.builder.jump(loop_check);
 
         // loop_check block
-        self.builder
-            .block(loop_check)
-            .load(
-                self.names.fresh("idx"),
-                Type::Primitive(PrimitiveType::I64),
-                var(idx_ptr),
-            );
+        self.builder.block(loop_check).load(
+            self.names.fresh("idx"),
+            Type::Primitive(PrimitiveType::I64),
+            var(idx_ptr),
+        );
         let idx_check = self.last_value_name();
         let cond_name = self.names.fresh("cond");
         self.builder.cmp(
@@ -151,8 +151,7 @@ impl<'a> ModuleCtx<'a> {
             var(idx_check),
             lit_i64(self.total_len),
         );
-        self.builder
-            .branch(var(cond_name), loop_body, after_loop);
+        self.builder.branch(var(cond_name), loop_body, after_loop);
 
         // loop_body block
         self.builder.block(loop_body).load(
@@ -165,13 +164,11 @@ impl<'a> ModuleCtx<'a> {
         self.builder.jump(loop_inc);
 
         // loop_inc block
-        self.builder
-            .block(loop_inc)
-            .load(
-                self.names.fresh("idx"),
-                Type::Primitive(PrimitiveType::I64),
-                var(idx_ptr),
-            );
+        self.builder.block(loop_inc).load(
+            self.names.fresh("idx"),
+            Type::Primitive(PrimitiveType::I64),
+            var(idx_ptr),
+        );
         let idx_inc = self.last_value_name();
         let next_idx = self.names.fresh("idx_next");
         self.builder.binary(
@@ -198,7 +195,12 @@ impl<'a> ModuleCtx<'a> {
     fn emit_operations(&mut self, idx_var: &'static str) -> Result<()> {
         for op in &self.kernel.operations {
             match op {
-                Operation::Binary { result, lhs, op, rhs } => {
+                Operation::Binary {
+                    result,
+                    lhs,
+                    op,
+                    rhs,
+                } => {
                     self.emit_binary_op(idx_var, result, lhs, rhs, op.clone())?;
                 }
                 Operation::Unary { result, op, input } => {
@@ -250,18 +252,13 @@ impl<'a> ModuleCtx<'a> {
             LcBinaryOp::Min | LcBinaryOp::Max => {
                 return Err(CodegenError::NotImplemented(
                     "min/max lowering not implemented",
-                ))
+                ));
             }
         };
 
         let tmp = self.names.fresh("tmp");
-        self.builder.binary(
-            lamina_op,
-            tmp,
-            res_elem_ty,
-            var(lhs_val),
-            var(rhs_val),
-        );
+        self.builder
+            .binary(lamina_op, tmp, res_elem_ty, var(lhs_val), var(rhs_val));
         self.emit_store_value(res_elem_ty, res_ptr, tmp);
         Ok(())
     }
@@ -289,7 +286,7 @@ impl<'a> ModuleCtx<'a> {
 
         let lamina_op = match op {
             laminax::lcir::UnaryOp::Neg => {
-                return Err(CodegenError::NotImplemented("Neg not implemented"))
+                return Err(CodegenError::NotImplemented("Neg not implemented"));
             }
             laminax::lcir::UnaryOp::Exp => LaminaBinOp::Add, // Placeholder, need unary exp
             laminax::lcir::UnaryOp::Log => LaminaBinOp::Add, // Placeholder
@@ -342,13 +339,10 @@ impl<'a> ModuleCtx<'a> {
             .store(Type::Primitive(elem_ty), var(ptr_var), var(value_var));
     }
 
-    fn tensor_info(
-        &self,
-        tensor_id: laminax::lcir::TensorId,
-    ) -> Result<&TensorLowerInfo> {
-        self.tensors.get(&tensor_id).ok_or_else(|| {
-            CodegenError::InvalidIr("tensor access references unknown tensor")
-        })
+    fn tensor_info(&self, tensor_id: laminax::lcir::TensorId) -> Result<&TensorLowerInfo> {
+        self.tensors
+            .get(&tensor_id)
+            .ok_or_else(|| CodegenError::InvalidIr("tensor access references unknown tensor"))
     }
 
     fn last_value_name(&self) -> &'static str {
@@ -423,5 +417,3 @@ impl NamePool {
         self.leaked.last().copied()
     }
 }
-
-

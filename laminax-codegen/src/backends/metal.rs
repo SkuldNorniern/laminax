@@ -13,7 +13,9 @@ impl MetalBackend {
 
     /// Compile Metal shader source to Metal library
     pub fn compile_shader(&self, _source: &str) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("Metal shader compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "Metal shader compilation not yet implemented",
+        ))
     }
 
     /// Compile from LCIR to Metal shader
@@ -31,9 +33,9 @@ impl Backend for MetalBackend {
             supports_int64: true,
             supports_int16: true,
             supports_int8: true,
-            supports_async: true,  // Metal supports async compute
+            supports_async: true, // Metal supports async compute
             unified_memory: cfg!(target_os = "macos"), // Unified memory on Apple Silicon
-            shared_memory: true,   // Metal shared memory
+            shared_memory: true,  // Metal shared memory
         }
     }
 
@@ -45,5 +47,3 @@ impl Backend for MetalBackend {
         "Metal"
     }
 }
-
-

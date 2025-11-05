@@ -3,8 +3,8 @@
 //! Each module provides lowering from Laminax Compute IR (LCIR)
 //! to specific backend formats (Lamina IR, CUDA, Metal, SPIR-V, etc.).
 
-pub mod lamina;
 pub mod cuda;
+pub mod lamina;
 pub mod metal;
 pub mod spirv;
 

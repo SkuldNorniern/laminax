@@ -13,7 +13,9 @@ impl WebGpuBackend {
 
     /// Compile WGSL shader
     pub fn compile_wgsl(&self, _source: &str) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("WGSL compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "WGSL compilation not yet implemented",
+        ))
     }
 
     /// Compile from LCIR to WGSL
@@ -26,8 +28,8 @@ impl WebGpuBackend {
 impl Backend for WebGpuBackend {
     fn capabilities(&self) -> BackendCapabilities {
         BackendCapabilities {
-            supports_fp64: false, // WebGPU doesn't support FP64
-            supports_fp16: true,  // WGSL supports f16
+            supports_fp64: false,  // WebGPU doesn't support FP64
+            supports_fp16: true,   // WGSL supports f16
             supports_int64: false, // Limited 64-bit support
             supports_int16: false,
             supports_int8: false,

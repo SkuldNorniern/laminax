@@ -26,5 +26,7 @@ impl LowerToTarget for MetalLowerer {
 pub fn lower_lcir_to_metal(_kernel: &laminax::lcir::Kernel) -> Result<String> {
     // TODO: Implement Metal lowering
     // This would convert LCIR operations to Metal Shading Language (MSL)
-    Err(CodegenError::NotImplemented("Metal lowering not yet implemented"))
+    Err(CodegenError::NotImplemented(
+        "Metal lowering not yet implemented",
+    ))
 }

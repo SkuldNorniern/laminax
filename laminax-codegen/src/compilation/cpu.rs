@@ -1,7 +1,7 @@
 //! CPU compilation using Lamina backend.
 
-use crate::compilation::Compiler;
 use crate::Result;
+use crate::compilation::Compiler;
 
 /// CPU compiler implementation
 pub struct CpuCompiler;

@@ -15,7 +15,9 @@ impl CudaCompiler {
 impl Compiler for CudaCompiler {
     fn compile(&self, _source: &str) -> Result<Vec<u8>> {
         // TODO: Implement CUDA compilation using NVRTC or nvcc
-        Err(CodegenError::NotImplemented("CUDA compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "CUDA compilation not yet implemented",
+        ))
     }
 
     fn name(&self) -> &'static str {

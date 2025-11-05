@@ -13,24 +13,32 @@ impl ShaderCompiler {
 
     /// Compile SPIR-V to Vulkan/OpenGL compatible format
     pub fn compile_spirv(&self, _spirv_bytes: &[u8]) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("SPIR-V compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "SPIR-V compilation not yet implemented",
+        ))
     }
 
     /// Compile OpenCL kernel
     pub fn compile_opencl(&self, _source: &str) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("OpenCL compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "OpenCL compilation not yet implemented",
+        ))
     }
 
     /// Compile WGSL shader
     pub fn compile_wgsl(&self, _source: &str) -> Result<Vec<u8>> {
-        Err(CodegenError::NotImplemented("WGSL compilation not yet implemented"))
+        Err(CodegenError::NotImplemented(
+            "WGSL compilation not yet implemented",
+        ))
     }
 }
 
 impl Compiler for ShaderCompiler {
     fn compile(&self, _source: &str) -> Result<Vec<u8>> {
         // This is a generic shader compiler - would need format detection
-        Err(CodegenError::NotImplemented("Generic shader compilation not implemented"))
+        Err(CodegenError::NotImplemented(
+            "Generic shader compilation not implemented",
+        ))
     }
 
     fn name(&self) -> &'static str {

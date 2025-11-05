@@ -3,13 +3,13 @@
 //! Each backend provides compilation and execution capabilities for
 //! specific hardware platforms (CPU, GPU, accelerators, etc.).
 
+pub mod apple;
 pub mod cpu;
 pub mod cuda;
 pub mod metal;
-pub mod vulkan;
 pub mod opencl;
+pub mod vulkan;
 pub mod webgpu;
-pub mod apple;
 
 use crate::{CodegenError, Result};
 

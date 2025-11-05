@@ -26,5 +26,7 @@ impl LowerToTarget for CudaLowerer {
 pub fn lower_lcir_to_cuda(_kernel: &laminax::lcir::Kernel) -> Result<String> {
     // TODO: Implement CUDA lowering
     // This would convert LCIR operations to CUDA kernel syntax
-    Err(CodegenError::NotImplemented("CUDA lowering not yet implemented"))
+    Err(CodegenError::NotImplemented(
+        "CUDA lowering not yet implemented",
+    ))
 }
