@@ -8,22 +8,40 @@ use crate::{DType, LaminaxError, NdArray, Result, Shape, Tensor};
 
 // Test backend factory for DSL tests
 fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn NdArray> {
-    struct TestArray { data: Vec<u8>, shape: Shape, dtype: DType }
+    struct TestArray {
+        data: Vec<u8>,
+        shape: Shape,
+        dtype: DType,
+    }
     impl std::fmt::Debug for TestArray {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "TestArray{{ shape: {:?}, dtype: {:?} }}", self.shape, self.dtype)
+            write!(
+                f,
+                "TestArray{{ shape: {:?}, dtype: {:?} }}",
+                self.shape, self.dtype
+            )
         }
     }
     impl NdArray for TestArray {
-        fn shape(&self) -> &Shape { &self.shape }
+        fn shape(&self) -> &Shape {
+            &self.shape
+        }
         fn strides(&self) -> &crate::Strides {
             // Strides are not actually used in these tests, so panic if called
             panic!("strides not implemented for test backend")
         }
-        fn len(&self) -> usize { self.shape.len() }
-        fn dtype(&self) -> DType { self.dtype }
-        unsafe fn as_bytes(&self) -> &[u8] { &self.data }
-        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { unimplemented!() }
+        fn len(&self) -> usize {
+            self.shape.len()
+        }
+        fn dtype(&self) -> DType {
+            self.dtype
+        }
+        unsafe fn as_bytes(&self) -> &[u8] {
+            &self.data
+        }
+        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
+            unimplemented!()
+        }
         fn clone_array(&self) -> Box<dyn NdArray> {
             Box::new(TestArray {
                 data: self.data.clone(),
@@ -31,11 +49,21 @@ fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn Nd
                 dtype: self.dtype,
             })
         }
-        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
-        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> { unimplemented!() }
+        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
+        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> {
+            unimplemented!()
+        }
     }
     Box::new(TestArray { data, shape, dtype })
 }
@@ -608,8 +636,16 @@ mod tests {
 
     #[test]
     fn dsl_matmul() {
-        let a = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0], Shape::from([2, 2]), test_backend_factory);
-        let b = Tensor::from_slice(&[5.0f32, 6.0, 7.0, 8.0], Shape::from([2, 2]), test_backend_factory);
+        let a = Tensor::from_slice(
+            &[1.0f32, 2.0, 3.0, 4.0],
+            Shape::from([2, 2]),
+            test_backend_factory,
+        );
+        let b = Tensor::from_slice(
+            &[5.0f32, 6.0, 7.0, 8.0],
+            Shape::from([2, 2]),
+            test_backend_factory,
+        );
 
         // Test matmul DSL - just check that the expression can be created
         let computation = a.dsl_matmul(b);
