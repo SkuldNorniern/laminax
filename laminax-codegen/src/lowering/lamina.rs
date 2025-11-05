@@ -1,8 +1,28 @@
 //! LCIR → Lamina IR lowering using the Lamina IR builder API.
 
-use std::collections::HashMap;
-
+use crate::lowering::LowerToTarget;
 use crate::{CodegenError, Result};
+
+/// Lamina IR lowering implementation
+pub struct LaminaLowerer;
+
+impl LaminaLowerer {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl LowerToTarget for LaminaLowerer {
+    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> Result<String> {
+        lower_lcir_to_lamina(kernel)
+    }
+
+    fn target_name(&self) -> &'static str {
+        "Lamina IR"
+    }
+}
+
+use std::collections::HashMap;
 
 use lamina::ir::{BinaryOp as LaminaBinOp, CmpOp, FunctionParameter, IRBuilder, PrimitiveType, Type};
 use lamina::ir::builder::{i64 as lit_i64, var};

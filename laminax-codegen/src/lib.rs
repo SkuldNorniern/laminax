@@ -1,17 +1,42 @@
-//! Laminax Codegen: Lowering and compilation utilities targeting CPU/Metal/Apple NPU.
+//! Laminax Codegen: Modular backend system for heterogeneous compute.
 //!
-//! Design goals:
-//! - Keep this crate independent of the `laminax` crate to avoid cyclic deps.
-//! - Accept Lamina IR as text for now; provide a trait so upstream can implement
-//!   LCIR → Lamina IR lowering in their own crate.
-//! - CPU backend implemented via `lamina` crate; Metal/Apple NPU exposed as stubs.
+//! Provides a comprehensive, extensible code generation framework supporting:
+//! - CPU execution via Lamina IR
+//! - GPU compute via CUDA/HIP, Metal, Vulkan
+//! - Cross-platform compute via OpenCL, WebGPU
+//! - Specialized acceleration via CoreML/ANE
+//!
+//! ## Architecture
+//!
+//! The codegen system is organized into four main layers:
+//!
+//! 1. **Backends**: Platform-specific implementations (CPU, GPU, etc.)
+//! 2. **Lowering**: LCIR → target format conversion (Lamina IR, CUDA, Metal, SPIR-V)
+//! 3. **Compilation**: Source → binary artifact compilation
+//! 4. **Common**: Shared utilities and type mappings
+//!
+//! ## Usage
+//!
+//! ```rust
+//! use laminax_codegen::{Backend, compile_from_lcir};
+//!
+//! // Compile LCIR kernel to CPU assembly
+//! let cpu_code = compile_from_lcir(&kernel, Backend::Cpu)?;
+//!
+//! // Compile LCIR kernel to Metal shader
+//! let metal_code = compile_from_lcir(&kernel, Backend::Metal)?;
+//! ```
 
 #![forbid(unsafe_code)]
 
-mod cpu;
-mod metal;
-mod npu;
-mod lowering;
+// Core modules
+pub mod backends;
+pub mod lowering;
+pub mod compilation;
+pub mod common;
+
+// Re-export key traits
+pub use compilation::Compiler;
 
 /// Minimal error type for codegen.
 #[derive(Debug)]
@@ -46,13 +71,14 @@ pub trait ToLaminaIr {
 
 impl ToLaminaIr for laminax::lcir::Kernel {
     fn to_lamina_ir(&self) -> Result<String> {
-        lowering::lower_lcir_to_lamina(self)
+        lowering::lamina::lower_lcir_to_lamina(self)
     }
 }
 
 /// Compile a Lamina IR program to a textual assembly for the current host CPU.
 pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> Result<String> {
-    let asm_bytes = cpu::compile_host_assembly(ir)?;
+    let compiler = compilation::cpu::CpuCompiler::new();
+    let asm_bytes = compiler.compile(ir)?;
     // Bytes are ASCII textual assembly. If conversion fails, treat as invalid IR.
     match String::from_utf8(asm_bytes) {
         Ok(s) => Ok(s),
@@ -60,12 +86,20 @@ pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> Result<String> {
     }
 }
 
-/// Compile a Lamina IR program to a backend-specific artifact (currently textual assembly on CPU).
+/// Compile a Lamina IR program to a backend-specific artifact.
 pub fn compile_lamina_ir(ir: &str, backend: Backend) -> Result<Vec<u8>> {
     match backend {
-        Backend::Cpu => cpu::compile_host_assembly(ir),
-        Backend::Metal => metal::compile_metal(ir),
-        Backend::AppleNpu => npu::compile_apple_npu(ir),
+        Backend::Cpu => {
+            let compiler = compilation::cpu::CpuCompiler::new();
+            compiler.compile(ir)
+        }
+        Backend::Metal => {
+            // This is a placeholder - real implementation would parse IR
+            Err(CodegenError::NotImplemented("Metal compilation from Lamina IR not yet implemented"))
+        }
+        Backend::AppleNpu => {
+            Err(CodegenError::NotImplemented("Apple NPU compilation from Lamina IR not yet implemented"))
+        }
     }
 }
 
@@ -75,10 +109,22 @@ pub fn lower_and_compile<T: ToLaminaIr>(lowerable: &T, backend: Backend) -> Resu
     compile_lamina_ir(&ir, backend)
 }
 
-/// Compile directly from LCIR kernel.
+/// Compile directly from LCIR kernel to backend-specific binary.
 pub fn compile_from_lcir(kernel: &laminax::lcir::Kernel, backend: Backend) -> Result<Vec<u8>> {
-    let ir = lowering::lower_lcir_to_lamina(kernel)?;
-    compile_lamina_ir(&ir, backend)
+    match backend {
+        Backend::Cpu => {
+            let backend = backends::cpu::CpuBackend::new();
+            backend.compile_from_lcir(kernel)
+        }
+        Backend::Metal => {
+            let backend = backends::metal::MetalBackend::new();
+            backend.compile_from_lcir(kernel)
+        }
+        Backend::AppleNpu => {
+            let backend = backends::apple::AppleBackend::new();
+            backend.compile_from_lcir(kernel)
+        }
+    }
 }
 
 
