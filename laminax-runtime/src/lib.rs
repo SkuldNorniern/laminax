@@ -13,10 +13,13 @@ pub mod execution;
 pub mod graph;
 pub mod memory;
 
-pub use device::{Device, DeviceCapabilities, DeviceType};
+pub use device::CpuDevice;
 pub use execution::{Executor, KernelInstance};
 pub use graph::{ComputationGraph, Edge, ExecutionPlan, Node};
 pub use memory::{Buffer, MemoryManager};
+
+// Re-export device types from laminax-types
+pub use laminax_types::{Device, DeviceCapabilities, DeviceType};
 
 /// Runtime error types
 #[derive(Debug)]

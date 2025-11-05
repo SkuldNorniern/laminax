@@ -3,10 +3,10 @@
 //! Handles the actual running of compiled kernels on devices.
 
 use super::Result;
-use super::device::Device;
 use super::graph::ExecutionPlan;
 use super::memory::{Buffer, MemoryManager};
 use laminax::{DType, Shape};
+use laminax_types::Device;
 use std::collections::HashMap;
 use std::sync::Arc;
 

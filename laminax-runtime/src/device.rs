@@ -1,47 +1,11 @@
 //! Device abstraction layer for heterogeneous computing
 //!
 //! Provides unified interfaces for different compute devices (CPU, GPU, etc.)
+//! Uses device types from laminax-types.
 
 use super::Result;
 use std::sync::Arc;
-
-/// Types of compute devices
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceType {
-    Cpu,
-    Gpu,
-    Accelerator,
-}
-
-/// Device capabilities and properties
-#[derive(Debug, Clone)]
-pub struct DeviceCapabilities {
-    pub device_type: DeviceType,
-    pub name: String,
-    pub compute_units: usize,
-    pub max_work_group_size: usize,
-    pub local_memory_size: usize,
-    pub global_memory_size: usize,
-    pub supports_fp64: bool,
-    pub supports_fp16: bool,
-}
-
-/// Abstract device interface
-pub trait Device: Send + Sync {
-    /// Get device type
-    fn device_type(&self) -> DeviceType;
-
-    /// Get device capabilities
-    fn capabilities(&self) -> &DeviceCapabilities;
-
-    /// Check if device is available for use
-    fn is_available(&self) -> bool;
-
-    /// Get device name
-    fn name(&self) -> &str {
-        &self.capabilities().name
-    }
-}
+use laminax_types::{Device, DeviceType, DeviceCapabilities};
 
 /// CPU device implementation
 pub struct CpuDevice {
@@ -61,6 +25,9 @@ impl CpuDevice {
             global_memory_size: get_system_memory(),
             supports_fp64: true,
             supports_fp16: cfg!(target_arch = "x86_64") || cfg!(target_arch = "aarch64"),
+            supports_async: false, // CPU operations are typically synchronous
+            unified_memory: true,  // CPU memory is unified
+            shared_memory: false,  // No special shared memory on CPU
         };
 
         Self { capabilities }
