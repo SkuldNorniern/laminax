@@ -2,10 +2,10 @@
 //!
 //! Handles allocation, deallocation, and data transfer across different memory spaces.
 
-use std::sync::Arc;
-use laminax::{Shape, DType};
-use super::device::Device;
 use super::Result;
+use super::device::Device;
+use laminax::{DType, Shape};
+use std::sync::Arc;
 
 /// Abstract buffer handle
 #[derive(Clone)]
@@ -31,7 +31,9 @@ impl MemoryManager {
     }
 
     pub fn allocate(&self, shape: Shape, dtype: DType, device: &Arc<dyn Device>) -> Result<Buffer> {
-        let id = self.next_buffer_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = self
+            .next_buffer_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // For now, we don't actually allocate - this is a placeholder
         // Real implementation would allocate device memory

@@ -2,13 +2,13 @@
 //!
 //! Handles the actual running of compiled kernels on devices.
 
+use super::Result;
+use super::device::Device;
+use super::graph::ExecutionPlan;
+use super::memory::{Buffer, MemoryManager};
+use laminax::{DType, Shape};
 use std::collections::HashMap;
 use std::sync::Arc;
-use laminax::{Shape, DType};
-use super::device::Device;
-use super::memory::{Buffer, MemoryManager};
-use super::graph::ExecutionPlan;
-use super::Result;
 
 /// Compiled kernel instance ready for execution
 pub struct KernelInstance {
@@ -41,7 +41,12 @@ impl Executor {
     }
 
     /// Allocate buffer and initialize with data
-    pub fn allocate_buffer_with_data(&mut self, shape: Shape, dtype: DType, data: Vec<u8>) -> Result<Buffer> {
+    pub fn allocate_buffer_with_data(
+        &mut self,
+        shape: Shape,
+        dtype: DType,
+        data: Vec<u8>,
+    ) -> Result<Buffer> {
         // For now, just allocate - data copying would be implemented here
         let buffer = self.allocate_buffer(shape, dtype)?;
         // TODO: Copy data to buffer
@@ -56,11 +61,19 @@ impl Executor {
     }
 
     /// Execute an execution plan
-    pub fn execute_plan(&mut self, plan: &ExecutionPlan, buffers: &HashMap<laminax::lcir::TensorId, Buffer>) -> Result<()> {
+    pub fn execute_plan(
+        &mut self,
+        plan: &ExecutionPlan,
+        buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
+    ) -> Result<()> {
         // For now, this is a placeholder that doesn't actually execute
         // Real implementation would dispatch operations to the device
 
-        println!("Executing plan with {} operations on {}", plan.nodes.len(), self.device.name());
+        println!(
+            "Executing plan with {} operations on {}",
+            plan.nodes.len(),
+            self.device.name()
+        );
 
         for &node_id in &plan.execution_order {
             let node = &plan.nodes[node_id];

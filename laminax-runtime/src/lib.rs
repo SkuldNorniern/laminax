@@ -4,19 +4,19 @@
 //! including computational graph representation, device abstraction, memory
 //! management, and kernel execution.
 
+use laminax::lcir::{self, MemoryScope};
 use std::collections::HashMap;
 use std::sync::Arc;
-use laminax::lcir::{self, MemoryScope};
 
 pub mod device;
-pub mod memory;
-pub mod graph;
 pub mod execution;
+pub mod graph;
+pub mod memory;
 
-pub use device::{Device, DeviceType, DeviceCapabilities};
-pub use memory::{Buffer, MemoryManager};
-pub use graph::{ComputationGraph, Node, Edge, ExecutionPlan};
+pub use device::{Device, DeviceCapabilities, DeviceType};
 pub use execution::{Executor, KernelInstance};
+pub use graph::{ComputationGraph, Edge, ExecutionPlan, Node};
+pub use memory::{Buffer, MemoryManager};
 
 /// Runtime error types
 #[derive(Debug)]
@@ -69,7 +69,9 @@ impl Runtime {
 
     /// Get the default CPU device
     pub fn cpu_device(&self) -> Option<&Arc<dyn Device>> {
-        self.devices.iter().find(|d| d.device_type() == DeviceType::Cpu)
+        self.devices
+            .iter()
+            .find(|d| d.device_type() == DeviceType::Cpu)
     }
 
     /// Create an executor for running computations
@@ -84,7 +86,8 @@ impl Runtime {
         inputs: HashMap<String, Vec<u8>>,
     ) -> Result<HashMap<String, Vec<u8>>> {
         let graph = ComputationGraph::from_lcir(kernel)?;
-        let device = self.cpu_device()
+        let device = self
+            .cpu_device()
             .ok_or_else(|| RuntimeError::Device("No CPU device available".to_string()))?
             .clone();
 
@@ -101,10 +104,7 @@ impl Runtime {
                     input_data.clone(),
                 )?
             } else {
-                executor.allocate_buffer(
-                    tensor_info.shape.clone(),
-                    tensor_info.dtype,
-                )?
+                executor.allocate_buffer(tensor_info.shape.clone(), tensor_info.dtype)?
             };
             buffers.insert(*tensor_id, buffer);
         }

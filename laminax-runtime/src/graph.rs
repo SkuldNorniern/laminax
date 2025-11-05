@@ -2,9 +2,9 @@
 //!
 //! Models the dependencies and execution order of tensor operations.
 
-use std::collections::{HashMap, VecDeque};
-use laminax::lcir::{self, Operation, TensorAccess, TensorId};
 use super::Result;
+use laminax::lcir::{self, Operation, TensorAccess, TensorId};
+use std::collections::{HashMap, VecDeque};
 
 /// Node in the computational graph
 #[derive(Debug, Clone)]
@@ -54,7 +54,9 @@ impl ComputationGraph {
 
             // Extract inputs and outputs from operation
             let (inputs, outputs) = match operation {
-                Operation::Binary { lhs, rhs, result, .. } => {
+                Operation::Binary {
+                    lhs, rhs, result, ..
+                } => {
                     let inputs = extract_tensor_ids(&[lhs.clone(), rhs.clone()]);
                     let outputs = extract_tensor_ids(&[result.clone()]);
                     (inputs, outputs)
@@ -92,7 +94,8 @@ impl ComputationGraph {
             }
 
             for &tensor_id in &inputs {
-                tensor_consumers.entry(tensor_id)
+                tensor_consumers
+                    .entry(tensor_id)
                     .or_insert_with(Vec::new)
                     .push(node_id);
             }
@@ -151,14 +154,19 @@ impl ComputationGraph {
         }
 
         if result.len() != self.nodes.len() {
-            return Err(super::RuntimeError::Graph("Cycle detected in computational graph".to_string()));
+            return Err(super::RuntimeError::Graph(
+                "Cycle detected in computational graph".to_string(),
+            ));
         }
 
         Ok(result)
     }
 
     /// Analyze tensor lifetimes for memory optimization
-    pub fn analyze_tensor_lifetimes(&self, execution_order: &[usize]) -> HashMap<TensorId, (usize, usize)> {
+    pub fn analyze_tensor_lifetimes(
+        &self,
+        execution_order: &[usize],
+    ) -> HashMap<TensorId, (usize, usize)> {
         let mut lifetimes = HashMap::new();
         let mut last_use = HashMap::new();
 
@@ -166,12 +174,10 @@ impl ComputationGraph {
         for (step, &node_id) in execution_order.iter().enumerate() {
             let node = &self.nodes[node_id];
             for &tensor_id in &node.inputs {
-                lifetimes.entry(tensor_id)
-                    .or_insert((step, step));
+                lifetimes.entry(tensor_id).or_insert((step, step));
             }
             for &tensor_id in &node.outputs {
-                lifetimes.entry(tensor_id)
-                    .or_insert((step, step));
+                lifetimes.entry(tensor_id).or_insert((step, step));
             }
         }
 
@@ -180,7 +186,8 @@ impl ComputationGraph {
             let node = &self.nodes[node_id];
             for &tensor_id in &node.inputs {
                 if let Some((first, _)) = lifetimes.get_mut(&tensor_id) {
-                    *last_use.entry(tensor_id).or_insert(step) = step.max(*last_use.get(&tensor_id).unwrap_or(&0));
+                    *last_use.entry(tensor_id).or_insert(step) =
+                        step.max(*last_use.get(&tensor_id).unwrap_or(&0));
                 }
             }
         }
@@ -212,7 +219,5 @@ impl ExecutionPlan {
 
 /// Extract tensor IDs from tensor accesses
 fn extract_tensor_ids(accesses: &[TensorAccess]) -> Vec<TensorId> {
-    accesses.iter()
-        .map(|access| access.tensor_id)
-        .collect()
+    accesses.iter().map(|access| access.tensor_id).collect()
 }

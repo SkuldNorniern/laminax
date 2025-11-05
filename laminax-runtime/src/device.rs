@@ -2,8 +2,8 @@
 //!
 //! Provides unified interfaces for different compute devices (CPU, GPU, etc.)
 
-use std::sync::Arc;
 use super::Result;
+use std::sync::Arc;
 
 /// Types of compute devices
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +56,7 @@ impl CpuDevice {
             compute_units: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1), // Fallback to 1 if unavailable
-            max_work_group_size: 1024, // Arbitrary limit for CPU
+            max_work_group_size: 1024,           // Arbitrary limit for CPU
             local_memory_size: 32 * 1024 * 1024, // 32MB L1/L2 cache estimate
             global_memory_size: get_system_memory(),
             supports_fp64: true,
@@ -89,10 +89,7 @@ fn get_system_memory() -> usize {
     {
         // Try using sysctl on macOS
         use std::process::Command;
-        if let Ok(output) = Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-        {
+        if let Ok(output) = Command::new("sysctl").args(["-n", "hw.memsize"]).output() {
             if let Ok(mem_str) = std::str::from_utf8(&output.stdout) {
                 if let Ok(mem) = mem_str.trim().parse::<usize>() {
                     return mem;
