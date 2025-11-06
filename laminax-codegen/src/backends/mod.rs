@@ -11,7 +11,6 @@ pub mod opencl;
 pub mod vulkan;
 pub mod webgpu;
 
-use crate::{CodegenError, Result};
 
 /// Backend capability flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,3 +36,4 @@ pub trait Backend {
     /// Get backend name
     fn name(&self) -> &'static str;
 }
+

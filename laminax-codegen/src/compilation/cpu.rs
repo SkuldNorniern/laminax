@@ -1,6 +1,5 @@
 //! CPU compilation using Lamina backend.
 
-use crate::Result;
 use crate::compilation::Compiler;
 
 /// CPU compiler implementation
@@ -13,7 +12,7 @@ impl CpuCompiler {
 }
 
 impl Compiler for CpuCompiler {
-    fn compile(&self, source: &str) -> Result<Vec<u8>> {
+    fn compile(&self, source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         // Use Lamina to compile to assembly
         let mut out = Vec::new();
         lamina::compile_lamina_ir_to_assembly(source, &mut out)?;
@@ -24,3 +23,4 @@ impl Compiler for CpuCompiler {
         "CPU Compiler"
     }
 }
+

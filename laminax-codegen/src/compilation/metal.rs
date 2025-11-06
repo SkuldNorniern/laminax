@@ -1,7 +1,7 @@
 //! Metal compilation.
 
 use crate::compilation::Compiler;
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// Metal compiler implementation
 pub struct MetalCompiler;
@@ -13,7 +13,7 @@ impl MetalCompiler {
 }
 
 impl Compiler for MetalCompiler {
-    fn compile(&self, _source: &str) -> Result<Vec<u8>> {
+    fn compile(&self, _source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         // TODO: Implement Metal compilation using Metal shader compiler
         Err(CodegenError::NotImplemented(
             "Metal compilation not yet implemented",
@@ -24,3 +24,4 @@ impl Compiler for MetalCompiler {
         "Metal Compiler"
     }
 }
+

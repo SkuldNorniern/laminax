@@ -1,7 +1,7 @@
 //! Metal backend for Apple GPUs.
 
 use crate::backends::{Backend, BackendCapabilities};
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// Metal backend implementation
 pub struct MetalBackend;
@@ -12,14 +12,14 @@ impl MetalBackend {
     }
 
     /// Compile Metal shader source to Metal library
-    pub fn compile_shader(&self, _source: &str) -> Result<Vec<u8>> {
+    pub fn compile_shader(&self, _source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         Err(CodegenError::NotImplemented(
             "Metal shader compilation not yet implemented",
         ))
     }
 
     /// Compile from LCIR to Metal shader
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> Result<Vec<u8>> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let source = crate::lowering::metal::lower_lcir_to_metal(_kernel)?;
         self.compile_shader(&source)
     }

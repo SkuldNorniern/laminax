@@ -1,7 +1,7 @@
 //! LCIR → Lamina IR lowering using the Lamina IR builder API.
 
 use crate::lowering::LowerToTarget;
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// Lamina IR lowering implementation
 pub struct LaminaLowerer;
@@ -13,7 +13,7 @@ impl LaminaLowerer {
 }
 
 impl LowerToTarget for LaminaLowerer {
-    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> Result<String> {
+    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
         lower_lcir_to_lamina(kernel)
     }
 
@@ -32,7 +32,7 @@ use laminax::lcir::{BinaryOp as LcBinaryOp, Kernel, MemoryScope, Operation, Tens
 use laminax::{DType, Shape};
 
 /// Lower an LCIR kernel into textual Lamina IR.
-pub fn lower_lcir_to_lamina(kernel: &Kernel) -> Result<String> {
+pub fn lower_lcir_to_lamina(kernel: &Kernel) -> std::result::Result<String, crate::CodegenError> {
     let mut ctx = ModuleCtx::new(kernel)?;
     ctx.build_module()?;
     Ok(format!("{}", ctx.builder.build()))
@@ -53,7 +53,7 @@ struct TensorLowerInfo {
 }
 
 impl<'a> ModuleCtx<'a> {
-    fn new(kernel: &'a Kernel) -> Result<Self> {
+    fn new(kernel: &'a Kernel) -> std::result::Result<Self, crate::CodegenError> {
         if kernel.tensors.is_empty() {
             return Err(CodegenError::InvalidIr("kernel has no tensors"));
         }
@@ -101,7 +101,7 @@ impl<'a> ModuleCtx<'a> {
         })
     }
 
-    fn build_module(&mut self) -> Result<()> {
+    fn build_module(&mut self) -> std::result::Result<(), crate::CodegenError> {
         let func_name = if self.kernel.name.is_empty() {
             self.names.fresh("kernel")
         } else {
@@ -192,7 +192,7 @@ impl<'a> ModuleCtx<'a> {
         Ok(())
     }
 
-    fn emit_operations(&mut self, idx_var: &'static str) -> Result<()> {
+    fn emit_operations(&mut self, idx_var: &'static str) -> std::result::Result<(), crate::CodegenError> {
         for op in &self.kernel.operations {
             match op {
                 Operation::Binary {
@@ -226,7 +226,7 @@ impl<'a> ModuleCtx<'a> {
         lhs: &TensorAccess,
         rhs: &TensorAccess,
         op: LcBinaryOp,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), crate::CodegenError> {
         let res_elem_ty = self.tensor_info(result.tensor_id)?.elem_ty;
         let lhs_elem_ty = self.tensor_info(lhs.tensor_id)?.elem_ty;
         let rhs_elem_ty = self.tensor_info(rhs.tensor_id)?.elem_ty;
@@ -269,7 +269,7 @@ impl<'a> ModuleCtx<'a> {
         result: &TensorAccess,
         op: laminax::lcir::UnaryOp,
         input: &TensorAccess,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), crate::CodegenError> {
         let res_elem_ty = self.tensor_info(result.tensor_id)?.elem_ty;
         let input_elem_ty = self.tensor_info(input.tensor_id)?.elem_ty;
 
@@ -307,7 +307,7 @@ impl<'a> ModuleCtx<'a> {
         &mut self,
         tensor_id: laminax::lcir::TensorId,
         idx_var: &'static str,
-    ) -> Result<&'static str> {
+    ) -> std::result::Result<&'static str, crate::CodegenError> {
         let info = self.tensor_info(tensor_id)?;
         let param_name = info.param_name;
         let elem_ty = info.elem_ty;
@@ -339,7 +339,7 @@ impl<'a> ModuleCtx<'a> {
             .store(Type::Primitive(elem_ty), var(ptr_var), var(value_var));
     }
 
-    fn tensor_info(&self, tensor_id: laminax::lcir::TensorId) -> Result<&TensorLowerInfo> {
+    fn tensor_info(&self, tensor_id: laminax::lcir::TensorId) -> std::result::Result<&TensorLowerInfo, crate::CodegenError> {
         self.tensors
             .get(&tensor_id)
             .ok_or_else(|| CodegenError::InvalidIr("tensor access references unknown tensor"))
@@ -350,7 +350,7 @@ impl<'a> ModuleCtx<'a> {
     }
 }
 
-fn total_elements(shape: &Shape) -> Result<i64> {
+fn total_elements(shape: &Shape) -> std::result::Result<i64, crate::CodegenError> {
     let mut total: i128 = 1;
     for &dim in shape.dims() {
         total = total
@@ -360,7 +360,7 @@ fn total_elements(shape: &Shape) -> Result<i64> {
     i64::try_from(total).map_err(|_| CodegenError::InvalidIr("shape exceeds i64 range"))
 }
 
-fn primitive_from_dtype(dtype: DType) -> Result<PrimitiveType> {
+fn primitive_from_dtype(dtype: DType) -> std::result::Result<PrimitiveType, crate::CodegenError> {
     match dtype {
         DType::F32 => Ok(PrimitiveType::F32),
         DType::F64 => Ok(PrimitiveType::F64),

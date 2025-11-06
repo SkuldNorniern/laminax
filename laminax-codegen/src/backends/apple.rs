@@ -1,7 +1,7 @@
 //! Apple Silicon backend (Neural Engine/CoreML).
 
 use crate::backends::{Backend, BackendCapabilities};
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// Apple Neural Engine/CoreML backend
 pub struct AppleBackend;
@@ -12,14 +12,14 @@ impl AppleBackend {
     }
 
     /// Compile for Apple Neural Engine via CoreML
-    pub fn compile_coreml(&self, _model_data: &[u8]) -> Result<Vec<u8>> {
+    pub fn compile_coreml(&self, _model_data: &[u8]) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         Err(CodegenError::NotImplemented(
             "CoreML compilation not yet implemented",
         ))
     }
 
     /// Compile from LCIR to CoreML model
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> Result<Vec<u8>> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         // For now, this would convert LCIR to CoreML format
         // Future: Use CoreML tools or MLCompute framework
         Err(CodegenError::NotImplemented(

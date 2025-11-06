@@ -1,7 +1,7 @@
 //! OpenCL backend for heterogeneous compute.
 
 use crate::backends::{Backend, BackendCapabilities};
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// OpenCL backend implementation
 pub struct OpenClBackend;
@@ -12,14 +12,14 @@ impl OpenClBackend {
     }
 
     /// Compile OpenCL kernel source
-    pub fn compile_kernel(&self, _source: &str) -> Result<Vec<u8>> {
+    pub fn compile_kernel(&self, _source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         Err(CodegenError::NotImplemented(
             "OpenCL kernel compilation not yet implemented",
         ))
     }
 
     /// Compile from LCIR to OpenCL kernel
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> Result<Vec<u8>> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let source = crate::lowering::spirv::lower_lcir_to_opencl(_kernel)?;
         self.compile_kernel(&source)
     }
@@ -48,3 +48,4 @@ impl Backend for OpenClBackend {
         "OpenCL"
     }
 }
+

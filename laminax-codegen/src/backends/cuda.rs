@@ -1,7 +1,7 @@
 //! CUDA/HIP backend for NVIDIA/AMD GPUs.
 
 use crate::backends::{Backend, BackendCapabilities};
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// CUDA/HIP backend implementation
 pub struct CudaBackend;
@@ -12,14 +12,14 @@ impl CudaBackend {
     }
 
     /// Compile CUDA/HIP kernel source
-    pub fn compile_kernel(&self, _source: &str) -> Result<Vec<u8>> {
+    pub fn compile_kernel(&self, _source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         Err(CodegenError::NotImplemented(
             "CUDA kernel compilation not yet implemented",
         ))
     }
 
     /// Compile from LCIR to CUDA/HIP kernel
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> Result<Vec<u8>> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let source = crate::lowering::cuda::lower_lcir_to_cuda(_kernel)?;
         self.compile_kernel(&source)
     }
@@ -48,3 +48,4 @@ impl Backend for CudaBackend {
         "CUDA"
     }
 }
+

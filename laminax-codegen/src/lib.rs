@@ -45,6 +45,11 @@ pub enum CodegenError {
     UnsupportedTarget(&'static str),
     NotImplemented(&'static str),
     InvalidIr(&'static str),
+    UnsupportedType {
+        backend: &'static str,
+        dtype: laminax::DType,
+        reason: &'static str,
+    },
 }
 
 impl From<lamina::LaminaError> for CodegenError {
@@ -53,8 +58,6 @@ impl From<lamina::LaminaError> for CodegenError {
     }
 }
 
-/// Result alias for codegen.
-pub type Result<T> = std::result::Result<T, CodegenError>;
 
 /// Target backends supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,17 +69,17 @@ pub enum Backend {
 
 /// Trait that upstream callers can implement to produce Lamina IR.
 pub trait ToLaminaIr {
-    fn to_lamina_ir(&self) -> Result<String>;
+    fn to_lamina_ir(&self) -> std::result::Result<String, CodegenError>;
 }
 
 impl ToLaminaIr for laminax::lcir::Kernel {
-    fn to_lamina_ir(&self) -> Result<String> {
+    fn to_lamina_ir(&self) -> std::result::Result<String, CodegenError> {
         lowering::lamina::lower_lcir_to_lamina(self)
     }
 }
 
 /// Compile a Lamina IR program to a textual assembly for the current host CPU.
-pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> Result<String> {
+pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> std::result::Result<String, CodegenError> {
     let compiler = compilation::cpu::CpuCompiler::new();
     let asm_bytes = compiler.compile(ir)?;
     // Bytes are ASCII textual assembly. If conversion fails, treat as invalid IR.
@@ -87,7 +90,7 @@ pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> Result<String> {
 }
 
 /// Compile a Lamina IR program to a backend-specific artifact.
-pub fn compile_lamina_ir(ir: &str, backend: Backend) -> Result<Vec<u8>> {
+pub fn compile_lamina_ir(ir: &str, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
     match backend {
         Backend::Cpu => {
             let compiler = compilation::cpu::CpuCompiler::new();
@@ -106,13 +109,13 @@ pub fn compile_lamina_ir(ir: &str, backend: Backend) -> Result<Vec<u8>> {
 }
 
 /// Convenience: lower a `ToLaminaIr` into Lamina IR then compile for a specific backend.
-pub fn lower_and_compile<T: ToLaminaIr>(lowerable: &T, backend: Backend) -> Result<Vec<u8>> {
+pub fn lower_and_compile<T: ToLaminaIr>(lowerable: &T, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
     let ir = lowerable.to_lamina_ir()?;
     compile_lamina_ir(&ir, backend)
 }
 
 /// Compile directly from LCIR kernel to backend-specific binary.
-pub fn compile_from_lcir(kernel: &laminax::lcir::Kernel, backend: Backend) -> Result<Vec<u8>> {
+pub fn compile_from_lcir(kernel: &laminax::lcir::Kernel, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
     match backend {
         Backend::Cpu => {
             let backend = backends::cpu::CpuBackend::new();

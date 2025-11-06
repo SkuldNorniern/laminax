@@ -1,7 +1,7 @@
 //! CUDA/HIP compilation.
 
 use crate::compilation::Compiler;
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// CUDA/HIP compiler implementation
 pub struct CudaCompiler;
@@ -13,7 +13,7 @@ impl CudaCompiler {
 }
 
 impl Compiler for CudaCompiler {
-    fn compile(&self, _source: &str) -> Result<Vec<u8>> {
+    fn compile(&self, _source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         // TODO: Implement CUDA compilation using NVRTC or nvcc
         Err(CodegenError::NotImplemented(
             "CUDA compilation not yet implemented",
@@ -24,3 +24,4 @@ impl Compiler for CudaCompiler {
         "CUDA Compiler"
     }
 }
+

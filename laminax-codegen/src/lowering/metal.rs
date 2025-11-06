@@ -1,7 +1,7 @@
 //! LCIR → Metal lowering.
 
 use crate::lowering::LowerToTarget;
-use crate::{CodegenError, Result};
+use crate::CodegenError;
 
 /// Metal lowering implementation
 pub struct MetalLowerer;
@@ -13,7 +13,7 @@ impl MetalLowerer {
 }
 
 impl LowerToTarget for MetalLowerer {
-    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> Result<String> {
+    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
         lower_lcir_to_metal(kernel)
     }
 
@@ -23,10 +23,11 @@ impl LowerToTarget for MetalLowerer {
 }
 
 /// Lower LCIR kernel to Metal shader source
-pub fn lower_lcir_to_metal(_kernel: &laminax::lcir::Kernel) -> Result<String> {
+pub fn lower_lcir_to_metal(_kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
     // TODO: Implement Metal lowering
     // This would convert LCIR operations to Metal Shading Language (MSL)
     Err(CodegenError::NotImplemented(
         "Metal lowering not yet implemented",
     ))
 }
+

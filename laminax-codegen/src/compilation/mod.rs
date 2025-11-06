@@ -8,13 +8,13 @@ pub mod cuda;
 pub mod metal;
 pub mod shader;
 
-use crate::Result;
 
 /// Common trait for compilation targets
 pub trait Compiler {
     /// Compile source code to binary artifact
-    fn compile(&self, source: &str) -> Result<Vec<u8>>;
+    fn compile(&self, source: &str) -> std::result::Result<Vec<u8>, crate::CodegenError>;
 
     /// Get compiler name
     fn name(&self) -> &'static str;
 }
+
