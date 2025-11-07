@@ -1,0 +1,7 @@
+[package]
+name = "laminax-lcir"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+laminax-types = { path = "../laminax-types" }

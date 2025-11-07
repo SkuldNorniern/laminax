@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 lamina = "0.0.6"
 laminax = { path = "../" }
+laminax-lcir = { path = "../laminax-lcir" }
