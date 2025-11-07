@@ -47,3 +47,42 @@ impl Backend for CpuBackend {
         "CPU"
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use laminax::lcir::{KernelBuilder, MemoryScope, access, index};
+    use laminax::{F32, Shape};
+
+    #[test]
+    fn test_cpu_backend_compilation() {
+        let mut builder = KernelBuilder::new("test_add");
+
+        // Add tensors - use I32 instead of F32 since Lamina may not support F32 loads yet
+        let a_id = builder.add_tensor("A", Shape::from([4, 4]), laminax::I32, MemoryScope::Global);
+        let b_id = builder.add_tensor("B", Shape::from([4, 4]), laminax::I32, MemoryScope::Global);
+        let c_id = builder.add_tensor("C", Shape::from([4, 4]), laminax::I32, MemoryScope::Global);
+
+        // Add loops
+        let i_loop = builder.add_loop("i", 0, 4, 1);
+        let j_loop = builder.add_loop("j", 0, 4, 1);
+
+        // Add operation: C[i,j] = A[i,j] + B[i,j]
+        let a_access = access::global(a_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
+        let b_access = access::global(b_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
+        let c_access = access::global(c_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
+
+        builder.add_binary_op(c_access.clone(), a_access, laminax::lcir::BinaryOp::Add, b_access);
+
+        let kernel = builder.build();
+
+        // Test compilation through CPU backend
+        let backend = CpuBackend::new();
+        let assembly = backend.compile_from_lcir(&kernel).unwrap();
+
+        // Verify we got assembly output
+        assert!(!assembly.is_empty());
+        println!("Generated assembly (first 500 chars):\n{}", 
+            String::from_utf8_lossy(&assembly[..assembly.len().min(500)]));
+    }
+}
