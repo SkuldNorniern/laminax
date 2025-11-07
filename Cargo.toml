@@ -6,4 +6,6 @@ edition = "2024"
 [dependencies]
 lamina = "0.0.6"
 laminax-types = { path = "laminax-types" }
+laminax-lcir = { path = "laminax-lcir" }
+laminax-runtime = { path = "laminax-runtime" }
 numina = "0.0.1"
