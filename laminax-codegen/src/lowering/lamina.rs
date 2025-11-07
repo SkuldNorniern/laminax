@@ -44,7 +44,6 @@ struct ModuleCtx<'a> {
     names: NamePool,
     tensors: HashMap<laminax::lcir::TensorId, TensorLowerInfo>,
     param_order: Vec<laminax::lcir::TensorId>,
-    total_len: i64,
 }
 
 struct TensorLowerInfo {
@@ -83,21 +82,12 @@ impl<'a> ModuleCtx<'a> {
             param_order.push(*tid);
         }
 
-        let shape = kernel
-            .tensors
-            .values()
-            .next()
-            .map(|info| info.shape.clone())
-            .unwrap_or_else(|| Shape::from([1usize]));
-        let total_len = total_elements(&shape)?;
-
         Ok(Self {
             kernel,
             builder: IRBuilder::new(),
             names,
             tensors,
             param_order,
-            total_len,
         })
     }
 
@@ -120,79 +110,111 @@ impl<'a> ModuleCtx<'a> {
         self.builder
             .function_with_params(func_name, params, Type::Void);
 
-        let idx_ptr = self.names.fresh("idx_ptr");
+        // Create loop variables for each loop in the kernel
+        let mut loop_vars = Vec::new();
+        for loop_info in &self.kernel.loops {
+            let loop_var = self.names.fresh(&format!("loop_{}", loop_info.name));
+            loop_vars.push(loop_var);
+        }
+
+        // Generate nested loop structure according to loop_nest
+        self.emit_nested_loops(&self.kernel.loop_nest, &loop_vars)?;
+
+        self.builder.ret_void();
+
+        Ok(())
+    }
+
+    fn emit_nested_loops(&mut self, loop_nest: &[laminax::lcir::LoopId], loop_vars: &[&'static str]) -> std::result::Result<(), crate::CodegenError> {
+        if loop_nest.is_empty() {
+            // No loops, just emit operations in the innermost scope
+            self.emit_operations(loop_vars)?;
+            return Ok(());
+        }
+
+        self.emit_nested_loops_recursive(loop_nest, loop_vars, 0)
+    }
+
+    fn emit_nested_loops_recursive(&mut self, loop_nest: &[laminax::lcir::LoopId], loop_vars: &[&'static str], depth: usize) -> std::result::Result<(), crate::CodegenError> {
+        if depth >= loop_nest.len() {
+            // Innermost loop body - emit operations
+            self.emit_operations(loop_vars)?;
+            return Ok(());
+        }
+
+        let loop_id = loop_nest[depth];
+        let loop_info = &self.kernel.loops.iter().find(|l| l.id == loop_id)
+            .ok_or_else(|| CodegenError::InvalidIr("loop_nest references unknown loop"))?;
+        let loop_var = loop_vars[loop_id.0];
+
+        // Initialize loop variable
         self.builder
-            .alloc_stack(idx_ptr, Type::Primitive(PrimitiveType::I64))
+            .alloc_stack(loop_var, Type::Primitive(PrimitiveType::I64))
             .store(
                 Type::Primitive(PrimitiveType::I64),
-                var(idx_ptr),
-                lit_i64(0),
+                var(loop_var),
+                lit_i64(loop_info.start),
             );
 
-        let loop_check = self.names.fresh("loop_check");
-        let loop_body = self.names.fresh("loop_body");
-        let loop_inc = self.names.fresh("loop_inc");
-        let after_loop = self.names.fresh("after_loop");
+        let loop_check = self.names.fresh(&format!("{}_check", loop_info.name));
+        let loop_body = self.names.fresh(&format!("{}_body", loop_info.name));
+        let loop_inc = self.names.fresh(&format!("{}_inc", loop_info.name));
+        let after_loop = self.names.fresh(&format!("{}_after", loop_info.name));
 
         self.builder.jump(loop_check);
 
         // loop_check block
         self.builder.block(loop_check).load(
-            self.names.fresh("idx"),
+            self.names.fresh(&format!("{}_val", loop_info.name)),
             Type::Primitive(PrimitiveType::I64),
-            var(idx_ptr),
+            var(loop_var),
         );
-        let idx_check = self.last_value_name();
-        let cond_name = self.names.fresh("cond");
+        let loop_val_check = self.last_value_name();
+        let cond_name = self.names.fresh(&format!("{}_cond", loop_info.name));
         self.builder.cmp(
             CmpOp::Lt,
             cond_name,
             PrimitiveType::I64,
-            var(idx_check),
-            lit_i64(self.total_len),
+            var(loop_val_check),
+            lit_i64(loop_info.end),
         );
         self.builder.branch(var(cond_name), loop_body, after_loop);
 
-        // loop_body block
-        self.builder.block(loop_body).load(
-            self.names.fresh("idx"),
-            Type::Primitive(PrimitiveType::I64),
-            var(idx_ptr),
-        );
-        let idx_body = self.last_value_name();
-        self.emit_operations(idx_body)?;
+        // loop_body block - emit nested loops or operations
+        self.builder.block(loop_body);
+        self.emit_nested_loops_recursive(loop_nest, loop_vars, depth + 1)?;
         self.builder.jump(loop_inc);
 
         // loop_inc block
         self.builder.block(loop_inc).load(
-            self.names.fresh("idx"),
+            self.names.fresh(&format!("{}_inc_val", loop_info.name)),
             Type::Primitive(PrimitiveType::I64),
-            var(idx_ptr),
+            var(loop_var),
         );
-        let idx_inc = self.last_value_name();
-        let next_idx = self.names.fresh("idx_next");
+        let loop_val_inc = self.last_value_name();
+        let next_val = self.names.fresh(&format!("{}_next", loop_info.name));
         self.builder.binary(
             LaminaBinOp::Add,
-            next_idx,
+            next_val,
             PrimitiveType::I64,
-            var(idx_inc),
-            lit_i64(1),
+            var(loop_val_inc),
+            lit_i64(loop_info.step),
         );
         self.builder
             .store(
                 Type::Primitive(PrimitiveType::I64),
-                var(idx_ptr),
-                var(next_idx),
+                var(loop_var),
+                var(next_val),
             )
             .jump(loop_check);
 
         // after_loop block
-        self.builder.block(after_loop).ret_void();
+        self.builder.block(after_loop);
 
         Ok(())
     }
 
-    fn emit_operations(&mut self, idx_var: &'static str) -> std::result::Result<(), crate::CodegenError> {
+    fn emit_operations(&mut self, loop_vars: &[&'static str]) -> std::result::Result<(), crate::CodegenError> {
         for op in &self.kernel.operations {
             match op {
                 Operation::Binary {
@@ -201,18 +223,19 @@ impl<'a> ModuleCtx<'a> {
                     op,
                     rhs,
                 } => {
-                    self.emit_binary_op(idx_var, result, lhs, rhs, op.clone())?;
+                    self.emit_binary_op(loop_vars, result, lhs, rhs, op.clone())?;
                 }
                 Operation::Unary { result, op, input } => {
-                    self.emit_unary_op(idx_var, result, op.clone(), input)?;
+                    self.emit_unary_op(loop_vars, result, op.clone(), input)?;
+                }
+                Operation::Load { result, source } => {
+                    self.emit_load_op(loop_vars, result, source)?;
+                }
+                Operation::Store { dest, value } => {
+                    self.emit_store_op(loop_vars, dest, value)?;
                 }
                 Operation::Barrier => {
                     // No-op placeholder until Lamina exposes barriers.
-                }
-                _ => {
-                    return Err(CodegenError::NotImplemented(
-                        "unsupported LCIR operation in Lamina lowering",
-                    ));
                 }
             }
         }
@@ -221,7 +244,7 @@ impl<'a> ModuleCtx<'a> {
 
     fn emit_binary_op(
         &mut self,
-        idx_var: &'static str,
+        loop_vars: &[&'static str],
         result: &TensorAccess,
         lhs: &TensorAccess,
         rhs: &TensorAccess,
@@ -237,9 +260,9 @@ impl<'a> ModuleCtx<'a> {
             ));
         }
 
-        let res_ptr = self.emit_element_ptr(result.tensor_id, idx_var)?;
-        let lhs_ptr = self.emit_element_ptr(lhs.tensor_id, idx_var)?;
-        let rhs_ptr = self.emit_element_ptr(rhs.tensor_id, idx_var)?;
+        let res_ptr = self.emit_tensor_access(result, loop_vars)?;
+        let lhs_ptr = self.emit_tensor_access(lhs, loop_vars)?;
+        let rhs_ptr = self.emit_tensor_access(rhs, loop_vars)?;
 
         let lhs_val = self.emit_load_value(lhs_elem_ty, lhs_ptr, "lhs_val");
         let rhs_val = self.emit_load_value(rhs_elem_ty, rhs_ptr, "rhs_val");
@@ -265,7 +288,7 @@ impl<'a> ModuleCtx<'a> {
 
     fn emit_unary_op(
         &mut self,
-        idx_var: &'static str,
+        loop_vars: &[&'static str],
         result: &TensorAccess,
         op: laminax::lcir::UnaryOp,
         input: &TensorAccess,
@@ -279,42 +302,211 @@ impl<'a> ModuleCtx<'a> {
             ));
         }
 
-        let res_ptr = self.emit_element_ptr(result.tensor_id, idx_var)?;
-        let input_ptr = self.emit_element_ptr(input.tensor_id, idx_var)?;
+        let res_ptr = self.emit_tensor_access(result, loop_vars)?;
+        let input_ptr = self.emit_tensor_access(input, loop_vars)?;
 
         let input_val = self.emit_load_value(input_elem_ty, input_ptr, "input_val");
 
-        let lamina_op = match op {
+        // For now, just copy input to output as placeholder for all unary operations
+        // TODO: Implement actual unary operations in Lamina IR
+        match op {
             laminax::lcir::UnaryOp::Neg => {
                 return Err(CodegenError::NotImplemented("Neg not implemented"));
             }
-            laminax::lcir::UnaryOp::Exp => LaminaBinOp::Add, // Placeholder, need unary exp
-            laminax::lcir::UnaryOp::Log => LaminaBinOp::Add, // Placeholder
-            laminax::lcir::UnaryOp::Sqrt => LaminaBinOp::Add, // Placeholder
-            laminax::lcir::UnaryOp::Sin => LaminaBinOp::Add, // Placeholder
-            laminax::lcir::UnaryOp::Cos => LaminaBinOp::Add, // Placeholder
-            laminax::lcir::UnaryOp::Tanh => LaminaBinOp::Add, // Placeholder
-        };
-
-        // For now, just copy input to output as placeholder
-        let tmp = input_val; // self.names.fresh("tmp");
-        // self.builder.unary(lamina_op, tmp, res_elem_ty, var(input_val));
-        self.emit_store_value(res_elem_ty, res_ptr, tmp);
+            _ => {
+                // Placeholder: just copy input to output
+                self.emit_store_value(res_elem_ty, res_ptr, input_val);
+            }
+        }
         Ok(())
     }
 
-    fn emit_element_ptr(
+    fn emit_load_op(
         &mut self,
-        tensor_id: laminax::lcir::TensorId,
-        idx_var: &'static str,
+        loop_vars: &[&'static str],
+        result: &TensorAccess,
+        source: &TensorAccess,
+    ) -> std::result::Result<(), crate::CodegenError> {
+        let res_elem_ty = self.tensor_info(result.tensor_id)?.elem_ty;
+        let src_elem_ty = self.tensor_info(source.tensor_id)?.elem_ty;
+
+        if src_elem_ty != res_elem_ty {
+            return Err(CodegenError::InvalidIr(
+                "load op expects matching source and result element types",
+            ));
+        }
+
+        let res_ptr = self.emit_tensor_access(result, loop_vars)?;
+        let src_ptr = self.emit_tensor_access(source, loop_vars)?;
+
+        let src_val = self.emit_load_value(src_elem_ty, src_ptr, "load_val");
+        self.emit_store_value(res_elem_ty, res_ptr, src_val);
+        Ok(())
+    }
+
+    fn emit_store_op(
+        &mut self,
+        loop_vars: &[&'static str],
+        dest: &TensorAccess,
+        value: &TensorAccess,
+    ) -> std::result::Result<(), crate::CodegenError> {
+        let dest_elem_ty = self.tensor_info(dest.tensor_id)?.elem_ty;
+        let val_elem_ty = self.tensor_info(value.tensor_id)?.elem_ty;
+
+        if val_elem_ty != dest_elem_ty {
+            return Err(CodegenError::InvalidIr(
+                "store op expects matching value and destination element types",
+            ));
+        }
+
+        let dest_ptr = self.emit_tensor_access(dest, loop_vars)?;
+        let val_ptr = self.emit_tensor_access(value, loop_vars)?;
+
+        let val = self.emit_load_value(val_elem_ty, val_ptr, "store_val");
+        self.emit_store_value(dest_elem_ty, dest_ptr, val);
+        Ok(())
+    }
+
+    fn emit_tensor_access(
+        &mut self,
+        access: &TensorAccess,
+        loop_vars: &[&'static str],
     ) -> std::result::Result<&'static str, crate::CodegenError> {
-        let info = self.tensor_info(tensor_id)?;
+        let info = self.tensor_info(access.tensor_id)?;
         let param_name = info.param_name;
         let elem_ty = info.elem_ty;
+
+        if access.indices.is_empty() {
+            // Scalar access (shouldn't happen in practice)
+            return Err(CodegenError::InvalidIr("tensor access requires indices"));
+        }
+
+        // Compute the flat index from multi-dimensional indices
+        let flat_index = self.emit_index_expr(&access.indices[0], loop_vars)?;
+
+        // For multi-dimensional tensors, we need to compute: flat_index = indices[0] * stride[0] + indices[1] * stride[1] + ...
+        // For simplicity, assume row-major (C-style) layout for now
+        let mut current_index = flat_index;
+        if access.indices.len() > 1 {
+            let tensor_info = self.kernel.tensors.get(&access.tensor_id)
+                .ok_or_else(|| CodegenError::InvalidIr("tensor access references unknown tensor"))?;
+
+            for (i, index_expr) in access.indices.iter().enumerate().skip(1) {
+                let index_val = self.emit_index_expr(index_expr, loop_vars)?;
+
+                // Compute stride for this dimension
+                let stride: i64 = tensor_info.shape.dims().iter().skip(i).map(|&x| x as i64).product();
+
+                let stride_val = self.names.fresh("stride");
+                self.builder
+                    .alloc_stack(stride_val, Type::Primitive(PrimitiveType::I64))
+                    .store(
+                        Type::Primitive(PrimitiveType::I64),
+                        var(stride_val),
+                        lit_i64(stride),
+                    );
+
+                let contrib = self.names.fresh("index_contrib");
+                self.builder.binary(
+                    LaminaBinOp::Mul,
+                    contrib,
+                    PrimitiveType::I64,
+                    var(index_val),
+                    var(stride_val),
+                );
+
+                let new_index = self.names.fresh("flat_index");
+                self.builder.binary(
+                    LaminaBinOp::Add,
+                    new_index,
+                    PrimitiveType::I64,
+                    var(current_index),
+                    var(contrib),
+                );
+                current_index = new_index;
+            }
+        }
+
+        // Now get the element pointer using the computed flat index
         let ptr_name = self.names.fresh("elem_ptr");
         self.builder
-            .getelementptr(ptr_name, var(param_name), var(idx_var), elem_ty);
+            .getelementptr(ptr_name, var(param_name), var(current_index), elem_ty);
         Ok(ptr_name)
+    }
+
+    fn emit_index_expr(
+        &mut self,
+        expr: &laminax::lcir::IndexExpr,
+        loop_vars: &[&'static str],
+    ) -> std::result::Result<&'static str, crate::CodegenError> {
+        match expr {
+            laminax::lcir::IndexExpr::Const(val) => {
+                let name = self.names.fresh("const_idx");
+                self.builder
+                    .alloc_stack(name, Type::Primitive(PrimitiveType::I64))
+                    .store(
+                        Type::Primitive(PrimitiveType::I64),
+                        var(name),
+                        lit_i64(*val),
+                    );
+                Ok(name)
+            }
+            laminax::lcir::IndexExpr::LoopVar(loop_id) => {
+                Ok(loop_vars[loop_id.0])
+            }
+            laminax::lcir::IndexExpr::Add(lhs, rhs) => {
+                let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
+                let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
+                let result = self.names.fresh("add_result");
+                self.builder.binary(
+                    LaminaBinOp::Add,
+                    result,
+                    PrimitiveType::I64,
+                    var(lhs_val),
+                    var(rhs_val),
+                );
+                Ok(result)
+            }
+            laminax::lcir::IndexExpr::Sub(lhs, rhs) => {
+                let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
+                let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
+                let result = self.names.fresh("sub_result");
+                self.builder.binary(
+                    LaminaBinOp::Sub,
+                    result,
+                    PrimitiveType::I64,
+                    var(lhs_val),
+                    var(rhs_val),
+                );
+                Ok(result)
+            }
+            laminax::lcir::IndexExpr::Mul(lhs, rhs) => {
+                let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
+                let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
+                let result = self.names.fresh("mul_result");
+                self.builder.binary(
+                    LaminaBinOp::Mul,
+                    result,
+                    PrimitiveType::I64,
+                    var(lhs_val),
+                    var(rhs_val),
+                );
+                Ok(result)
+            }
+            laminax::lcir::IndexExpr::Div(lhs, rhs) => {
+                let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
+                let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
+                let result = self.names.fresh("div_result");
+                self.builder.binary(
+                    LaminaBinOp::Div,
+                    result,
+                    PrimitiveType::I64,
+                    var(lhs_val),
+                    var(rhs_val),
+                );
+                Ok(result)
+            }
+        }
     }
 
     fn emit_load_value(
@@ -415,5 +607,47 @@ impl NamePool {
 
     fn last(&self) -> Option<&'static str> {
         self.leaked.last().copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use laminax::lcir::{KernelBuilder, MemoryScope, access, index};
+    use laminax::{F32, Shape};
+
+    #[test]
+    fn test_simple_elementwise_add() {
+        let mut builder = KernelBuilder::new("test_add");
+
+        // Add tensors
+        let a_id = builder.add_tensor("A", Shape::from([4, 4]), F32, MemoryScope::Global);
+        let b_id = builder.add_tensor("B", Shape::from([4, 4]), F32, MemoryScope::Global);
+        let c_id = builder.add_tensor("C", Shape::from([4, 4]), F32, MemoryScope::Global);
+
+        // Add loops
+        let i_loop = builder.add_loop("i", 0, 4, 1);
+        let j_loop = builder.add_loop("j", 0, 4, 1);
+
+        // Add operation: C[i,j] = A[i,j] + B[i,j]
+        let a_access = access::global(a_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
+        let b_access = access::global(b_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
+        let c_access = access::global(c_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
+
+        builder.add_binary_op(c_access.clone(), a_access, laminax::lcir::BinaryOp::Add, b_access);
+
+        let kernel = builder.build();
+
+        // Lower to Lamina IR
+        let lamina_ir = lower_lcir_to_lamina(&kernel).unwrap();
+
+        // Print the generated IR for debugging
+        println!("Generated Lamina IR:\n{}", lamina_ir);
+
+        // Check that it contains expected elements
+        assert!(lamina_ir.contains("function") || lamina_ir.contains("fn"));
+        assert!(lamina_ir.contains("loop_i") || lamina_ir.contains("i"));
+        assert!(lamina_ir.contains("loop_j") || lamina_ir.contains("j"));
+        assert!(lamina_ir.contains("add") || lamina_ir.contains("+"));
     }
 }
