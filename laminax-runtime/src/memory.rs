@@ -14,6 +14,8 @@ pub struct Buffer {
     pub shape: Shape,
     pub dtype: DType,
     pub device: Arc<dyn Device>,
+    // For CPU execution, store the actual data
+    pub data: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
 }
 
 /// Memory manager coordinating allocations across devices
@@ -35,14 +37,16 @@ impl MemoryManager {
             .next_buffer_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-        // For now, we don't actually allocate - this is a placeholder
-        // Real implementation would allocate device memory
+        // For CPU, allocate actual memory
+        let size_bytes = shape.len() * dtype.dtype_size_bytes();
+        let data = Arc::new(std::sync::Mutex::new(vec![0u8; size_bytes]));
 
         Ok(Buffer {
             id,
             shape,
             dtype,
             device: device.clone(),
+            data,
         })
     }
 

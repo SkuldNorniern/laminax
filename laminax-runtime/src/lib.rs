@@ -140,3 +140,56 @@ pub fn execute_simple_kernel(
     let runtime = Runtime::new()?;
     runtime.execute_kernel(kernel, inputs)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use laminax::lcir::{KernelBuilder, MemoryScope, access, index};
+    use laminax::{I32, Shape};
+
+    #[test]
+    fn test_end_to_end_execution() {
+        // Create a simple kernel: C = A + B (element-wise addition)
+        let mut builder = KernelBuilder::new("add_kernel");
+
+        let a_id = builder.add_tensor("A", Shape::from([4]), I32, MemoryScope::Global);
+        let b_id = builder.add_tensor("B", Shape::from([4]), I32, MemoryScope::Global);
+        let c_id = builder.add_tensor("C", Shape::from([4]), I32, MemoryScope::Global);
+
+        // Simple loop over elements (simplified - real version would have proper nested loops)
+        let i_loop = builder.add_loop("i", 0, 4, 1);
+
+        let a_access = access::global(a_id, vec![index::loop_var(i_loop)]);
+        let b_access = access::global(b_id, vec![index::loop_var(i_loop)]);
+        let c_access = access::global(c_id, vec![index::loop_var(i_loop)]);
+
+        builder.add_binary_op(c_access, a_access, laminax::lcir::BinaryOp::Add, b_access);
+
+        let kernel = builder.build();
+
+        // Prepare input data
+        let a_data = vec![1i32, 2, 3, 4];
+        let b_data = vec![10i32, 20, 30, 40];
+        let expected_c = vec![11i32, 22, 33, 44];
+
+        let mut inputs = HashMap::new();
+        inputs.insert("A".to_string(), unsafe {
+            std::slice::from_raw_parts(a_data.as_ptr() as *const u8, a_data.len() * 4).to_vec()
+        });
+        inputs.insert("B".to_string(), unsafe {
+            std::slice::from_raw_parts(b_data.as_ptr() as *const u8, b_data.len() * 4).to_vec()
+        });
+
+        // Execute the kernel
+        let outputs = execute_simple_kernel(&kernel, inputs).unwrap();
+
+        // Check the result
+        let c_result = outputs.get("C").unwrap();
+        let c_values: Vec<i32> = c_result.chunks(4)
+            .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+
+        assert_eq!(c_values, expected_c);
+        println!("Execution successful! Result: {:?}", c_values);
+    }
+}
