@@ -3,7 +3,7 @@
 //! Models the dependencies and execution order of tensor operations.
 
 use super::Result;
-use laminax::lcir::{self, Operation, TensorAccess, TensorId};
+use laminax_lcir::{self as lcir, Operation, TensorAccess, TensorId};
 use std::collections::{HashMap, VecDeque};
 
 /// Node in the computational graph

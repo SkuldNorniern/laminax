@@ -19,7 +19,7 @@ impl VulkanBackend {
     }
 
     /// Compile from LCIR to SPIR-V
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax_lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let spirv = crate::lowering::spirv::lower_lcir_to_spirv(_kernel)?;
         self.compile_spirv(spirv.as_bytes())
     }

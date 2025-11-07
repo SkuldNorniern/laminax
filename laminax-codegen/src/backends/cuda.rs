@@ -19,7 +19,7 @@ impl CudaBackend {
     }
 
     /// Compile from LCIR to CUDA/HIP kernel
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax_lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let source = crate::lowering::cuda::lower_lcir_to_cuda(_kernel)?;
         self.compile_kernel(&source)
     }

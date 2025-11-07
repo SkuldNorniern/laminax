@@ -19,7 +19,7 @@ impl AppleBackend {
     }
 
     /// Compile from LCIR to CoreML model
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax_lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         // For now, this would convert LCIR to CoreML format
         // Future: Use CoreML tools or MLCompute framework
         Err(CodegenError::NotImplemented(

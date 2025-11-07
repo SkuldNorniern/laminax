@@ -4,7 +4,7 @@
 //! including computational graph representation, device abstraction, memory
 //! management, and kernel execution.
 
-use laminax::lcir::{self, MemoryScope};
+use laminax_lcir::{self as lcir, MemoryScope};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -144,8 +144,8 @@ pub fn execute_simple_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use laminax::lcir::{KernelBuilder, MemoryScope, access, index};
-    use laminax::{I32, Shape};
+    use laminax_lcir::{KernelBuilder, MemoryScope, access, index};
+    use laminax_types::{I32, Shape};
 
     #[test]
     fn test_end_to_end_execution() {
@@ -163,7 +163,7 @@ mod tests {
         let b_access = access::global(b_id, vec![index::loop_var(i_loop)]);
         let c_access = access::global(c_id, vec![index::loop_var(i_loop)]);
 
-        builder.add_binary_op(c_access, a_access, laminax::lcir::BinaryOp::Add, b_access);
+        builder.add_binary_op(c_access, a_access, lcir::BinaryOp::Add, b_access);
 
         let kernel = builder.build();
 

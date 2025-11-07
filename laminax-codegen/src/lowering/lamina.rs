@@ -28,11 +28,11 @@ use lamina::ir::builder::{i64 as lit_i64, var};
 use lamina::ir::{
     BinaryOp as LaminaBinOp, CmpOp, FunctionParameter, IRBuilder, PrimitiveType, Type,
 };
-use laminax::lcir::{BinaryOp as LcBinaryOp, Kernel, MemoryScope, Operation, TensorAccess};
+use laminax_lcir::{BinaryOp as LcBinaryOp, Kernel, MemoryScope, Operation, TensorAccess};
 use laminax::{DType, Shape};
 
 /// Lower an LCIR kernel into textual Lamina IR.
-pub fn lower_lcir_to_lamina(kernel: &Kernel) -> std::result::Result<String, crate::CodegenError> {
+pub fn lower_lcir_to_lamina(kernel: &laminax_lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
     let mut ctx = ModuleCtx::new(kernel)?;
     ctx.build_module()?;
     Ok(format!("{}", ctx.builder.build()))
@@ -42,8 +42,8 @@ struct ModuleCtx<'a> {
     kernel: &'a Kernel,
     builder: IRBuilder<'static>,
     names: NamePool,
-    tensors: HashMap<laminax::lcir::TensorId, TensorLowerInfo>,
-    param_order: Vec<laminax::lcir::TensorId>,
+    tensors: HashMap<laminax_lcir::TensorId, TensorLowerInfo>,
+    param_order: Vec<laminax_lcir::TensorId>,
 }
 
 struct TensorLowerInfo {
@@ -125,7 +125,7 @@ impl<'a> ModuleCtx<'a> {
         Ok(())
     }
 
-    fn emit_nested_loops(&mut self, loop_nest: &[laminax::lcir::LoopId], loop_vars: &[&'static str]) -> std::result::Result<(), crate::CodegenError> {
+    fn emit_nested_loops(&mut self, loop_nest: &[laminax_lcir::LoopId], loop_vars: &[&'static str]) -> std::result::Result<(), crate::CodegenError> {
         if loop_nest.is_empty() {
             // No loops, just emit operations in the innermost scope
             self.emit_operations(loop_vars)?;
@@ -135,7 +135,7 @@ impl<'a> ModuleCtx<'a> {
         self.emit_nested_loops_recursive(loop_nest, loop_vars, 0)
     }
 
-    fn emit_nested_loops_recursive(&mut self, loop_nest: &[laminax::lcir::LoopId], loop_vars: &[&'static str], depth: usize) -> std::result::Result<(), crate::CodegenError> {
+    fn emit_nested_loops_recursive(&mut self, loop_nest: &[laminax_lcir::LoopId], loop_vars: &[&'static str], depth: usize) -> std::result::Result<(), crate::CodegenError> {
         if depth >= loop_nest.len() {
             // Innermost loop body - emit operations
             self.emit_operations(loop_vars)?;
@@ -290,7 +290,7 @@ impl<'a> ModuleCtx<'a> {
         &mut self,
         loop_vars: &[&'static str],
         result: &TensorAccess,
-        op: laminax::lcir::UnaryOp,
+        op: laminax_lcir::UnaryOp,
         input: &TensorAccess,
     ) -> std::result::Result<(), crate::CodegenError> {
         let res_elem_ty = self.tensor_info(result.tensor_id)?.elem_ty;
@@ -310,7 +310,7 @@ impl<'a> ModuleCtx<'a> {
         // For now, just copy input to output as placeholder for all unary operations
         // TODO: Implement actual unary operations in Lamina IR
         match op {
-            laminax::lcir::UnaryOp::Neg => {
+            laminax_lcir::UnaryOp::Neg => {
                 return Err(CodegenError::NotImplemented("Neg not implemented"));
             }
             _ => {
@@ -436,11 +436,11 @@ impl<'a> ModuleCtx<'a> {
 
     fn emit_index_expr(
         &mut self,
-        expr: &laminax::lcir::IndexExpr,
+        expr: &laminax_lcir::IndexExpr,
         loop_vars: &[&'static str],
     ) -> std::result::Result<&'static str, crate::CodegenError> {
         match expr {
-            laminax::lcir::IndexExpr::Const(val) => {
+            laminax_lcir::IndexExpr::Const(val) => {
                 let name = self.names.fresh("const_idx");
                 self.builder
                     .alloc_stack(name, Type::Primitive(PrimitiveType::I64))
@@ -451,10 +451,10 @@ impl<'a> ModuleCtx<'a> {
                     );
                 Ok(name)
             }
-            laminax::lcir::IndexExpr::LoopVar(loop_id) => {
+            laminax_lcir::IndexExpr::LoopVar(loop_id) => {
                 Ok(loop_vars[loop_id.0])
             }
-            laminax::lcir::IndexExpr::Add(lhs, rhs) => {
+            laminax_lcir::IndexExpr::Add(lhs, rhs) => {
                 let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
                 let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
                 let result = self.names.fresh("add_result");
@@ -467,7 +467,7 @@ impl<'a> ModuleCtx<'a> {
                 );
                 Ok(result)
             }
-            laminax::lcir::IndexExpr::Sub(lhs, rhs) => {
+            laminax_lcir::IndexExpr::Sub(lhs, rhs) => {
                 let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
                 let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
                 let result = self.names.fresh("sub_result");
@@ -480,7 +480,7 @@ impl<'a> ModuleCtx<'a> {
                 );
                 Ok(result)
             }
-            laminax::lcir::IndexExpr::Mul(lhs, rhs) => {
+            laminax_lcir::IndexExpr::Mul(lhs, rhs) => {
                 let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
                 let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
                 let result = self.names.fresh("mul_result");
@@ -493,7 +493,7 @@ impl<'a> ModuleCtx<'a> {
                 );
                 Ok(result)
             }
-            laminax::lcir::IndexExpr::Div(lhs, rhs) => {
+            laminax_lcir::IndexExpr::Div(lhs, rhs) => {
                 let lhs_val = self.emit_index_expr(lhs, loop_vars)?;
                 let rhs_val = self.emit_index_expr(rhs, loop_vars)?;
                 let result = self.names.fresh("div_result");
@@ -531,7 +531,7 @@ impl<'a> ModuleCtx<'a> {
             .store(Type::Primitive(elem_ty), var(ptr_var), var(value_var));
     }
 
-    fn tensor_info(&self, tensor_id: laminax::lcir::TensorId) -> std::result::Result<&TensorLowerInfo, crate::CodegenError> {
+    fn tensor_info(&self, tensor_id: laminax_lcir::TensorId) -> std::result::Result<&TensorLowerInfo, crate::CodegenError> {
         self.tensors
             .get(&tensor_id)
             .ok_or_else(|| CodegenError::InvalidIr("tensor access references unknown tensor"))
@@ -613,7 +613,7 @@ impl NamePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use laminax::lcir::{KernelBuilder, MemoryScope, access, index};
+    use laminax_lcir::{KernelBuilder, MemoryScope, access, index};
     use laminax::{F32, Shape};
 
     #[test]
@@ -634,7 +634,7 @@ mod tests {
         let b_access = access::global(b_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
         let c_access = access::global(c_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
 
-        builder.add_binary_op(c_access.clone(), a_access, laminax::lcir::BinaryOp::Add, b_access);
+        builder.add_binary_op(c_access.clone(), a_access, laminax_lcir::BinaryOp::Add, b_access);
 
         let kernel = builder.build();
 

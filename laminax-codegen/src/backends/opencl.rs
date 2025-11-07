@@ -19,7 +19,7 @@ impl OpenClBackend {
     }
 
     /// Compile from LCIR to OpenCL kernel
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax_lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let source = crate::lowering::spirv::lower_lcir_to_opencl(_kernel)?;
         self.compile_kernel(&source)
     }

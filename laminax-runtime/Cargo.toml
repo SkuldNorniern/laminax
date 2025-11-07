@@ -4,6 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-laminax-codegen = { path = "../laminax-codegen" }
-laminax = { path = ".." }
 laminax-types = { path = "../laminax-types" }
+laminax-lcir = { path = "../laminax-lcir" }

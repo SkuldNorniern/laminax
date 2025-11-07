@@ -19,7 +19,7 @@ impl CpuBackend {
     }
 
     /// Compile from LCIR to host assembly.
-    pub fn compile_from_lcir(&self, kernel: &laminax::lcir::Kernel) -> Result<Vec<u8>, CodegenError> {
+    pub fn compile_from_lcir(&self, kernel: &laminax_lcir::Kernel) -> Result<Vec<u8>, CodegenError> {
         let ir = crate::lowering::lamina::lower_lcir_to_lamina(kernel)?;
         self.compile_assembly(&ir)
     }
@@ -51,7 +51,7 @@ impl Backend for CpuBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use laminax::lcir::{KernelBuilder, MemoryScope, access, index};
+    use laminax_lcir::{KernelBuilder, MemoryScope, access, index};
     use laminax::{F32, Shape};
 
     #[test]
@@ -72,7 +72,7 @@ mod tests {
         let b_access = access::global(b_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
         let c_access = access::global(c_id, vec![index::loop_var(i_loop), index::loop_var(j_loop)]);
 
-        builder.add_binary_op(c_access.clone(), a_access, laminax::lcir::BinaryOp::Add, b_access);
+        builder.add_binary_op(c_access.clone(), a_access, laminax_lcir::BinaryOp::Add, b_access);
 
         let kernel = builder.build();
 

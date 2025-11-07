@@ -5,7 +5,8 @@
 use super::Result;
 use super::graph::ExecutionPlan;
 use super::memory::{Buffer, MemoryManager};
-use laminax::{DType, Shape};
+use laminax_types::{DType, Shape};
+use laminax_lcir as lcir;
 use laminax_types::Device;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,7 +68,7 @@ impl Executor {
     pub fn execute_plan(
         &mut self,
         plan: &ExecutionPlan,
-        buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
+        buffers: &HashMap<lcir::TensorId, Buffer>,
     ) -> Result<()> {
         println!(
             "Executing plan with {} operations on {}",
@@ -88,9 +89,9 @@ impl Executor {
     fn execute_operation(
         &mut self,
         node: &super::graph::Node,
-        buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
+        buffers: &HashMap<lcir::TensorId, Buffer>,
     ) -> Result<()> {
-        use laminax::lcir::Operation;
+        use lcir::Operation;
 
         match &node.operation {
             Operation::Binary { result, lhs, op, rhs } => {
@@ -115,11 +116,11 @@ impl Executor {
 
     fn execute_binary_op(
         &mut self,
-        buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
-        result: &laminax::lcir::TensorAccess,
-        lhs: &laminax::lcir::TensorAccess,
-        rhs: &laminax::lcir::TensorAccess,
-        op: &laminax::lcir::BinaryOp,
+        buffers: &HashMap<lcir::TensorId, Buffer>,
+        result: &lcir::TensorAccess,
+        lhs: &lcir::TensorAccess,
+        rhs: &lcir::TensorAccess,
+        op: &lcir::BinaryOp,
     ) -> Result<()> {
         let result_buf = buffers.get(&result.tensor_id).unwrap();
         let lhs_buf = buffers.get(&lhs.tensor_id).unwrap();
@@ -130,14 +131,14 @@ impl Executor {
         let len = result_buf.shape.len();
         for i in 0..len {
             match result_buf.dtype {
-                laminax::DType::I32 => {
+                laminax_types::DType::I32 => {
                     let lhs_val = self.read_i32(lhs_buf, i);
                     let rhs_val = self.read_i32(rhs_buf, i);
                     let result_val = match op {
-                        laminax::lcir::BinaryOp::Add => lhs_val + rhs_val,
-                        laminax::lcir::BinaryOp::Sub => lhs_val - rhs_val,
-                        laminax::lcir::BinaryOp::Mul => lhs_val * rhs_val,
-                        laminax::lcir::BinaryOp::Div => lhs_val / rhs_val,
+                        lcir::BinaryOp::Add => lhs_val + rhs_val,
+                        lcir::BinaryOp::Sub => lhs_val - rhs_val,
+                        lcir::BinaryOp::Mul => lhs_val * rhs_val,
+                        lcir::BinaryOp::Div => lhs_val / rhs_val,
                         _ => return Err(super::RuntimeError::Execution("Unsupported binary op".to_string())),
                     };
                     self.write_i32(result_buf, i, result_val);
@@ -151,10 +152,10 @@ impl Executor {
 
     fn execute_unary_op(
         &mut self,
-        _buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
-        _result: &laminax::lcir::TensorAccess,
-        _op: &laminax::lcir::UnaryOp,
-        _input: &laminax::lcir::TensorAccess,
+        _buffers: &HashMap<lcir::TensorId, Buffer>,
+        _result: &lcir::TensorAccess,
+        _op: &lcir::UnaryOp,
+        _input: &lcir::TensorAccess,
     ) -> Result<()> {
         // Placeholder - implement unary operations
         Ok(())
@@ -162,9 +163,9 @@ impl Executor {
 
     fn execute_load_op(
         &mut self,
-        buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
-        result: &laminax::lcir::TensorAccess,
-        source: &laminax::lcir::TensorAccess,
+        buffers: &HashMap<lcir::TensorId, Buffer>,
+        result: &lcir::TensorAccess,
+        source: &lcir::TensorAccess,
     ) -> Result<()> {
         // For now, just copy data (simplified)
         let result_buf = buffers.get(&result.tensor_id).unwrap();
@@ -181,9 +182,9 @@ impl Executor {
 
     fn execute_store_op(
         &mut self,
-        buffers: &HashMap<laminax::lcir::TensorId, Buffer>,
-        dest: &laminax::lcir::TensorAccess,
-        value: &laminax::lcir::TensorAccess,
+        buffers: &HashMap<lcir::TensorId, Buffer>,
+        dest: &lcir::TensorAccess,
+        value: &lcir::TensorAccess,
     ) -> Result<()> {
         // For now, just copy data (simplified)
         let dest_buf = buffers.get(&dest.tensor_id).unwrap();
@@ -200,7 +201,7 @@ impl Executor {
 
     fn compute_flat_index(
         &self,
-        _access: &laminax::lcir::TensorAccess,
+        _access: &lcir::TensorAccess,
         _loop_vars: &[i64],
     ) -> Result<usize> {
         // Simplified - return 0 for now

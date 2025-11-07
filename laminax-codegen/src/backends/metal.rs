@@ -19,7 +19,7 @@ impl MetalBackend {
     }
 
     /// Compile from LCIR to Metal shader
-    pub fn compile_from_lcir(&self, _kernel: &laminax::lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
+    pub fn compile_from_lcir(&self, _kernel: &laminax_lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let source = crate::lowering::metal::lower_lcir_to_metal(_kernel)?;
         self.compile_shader(&source)
     }

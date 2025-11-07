@@ -5,10 +5,10 @@
 //! It compiles to optimized machine code via Lamina IR for CPU and CUDA/HIP for GPU.
 
 pub mod dsl;
-pub mod lcir;
 
 // Re-export everything from our foundation crates for unified API
 pub use laminax_types::*; // Tensor API and types
+pub use laminax_lcir as lcir; // LCIR types and builder
 
 // Re-export additional items from numina (not already exported via laminax_types)
 pub use numina::{

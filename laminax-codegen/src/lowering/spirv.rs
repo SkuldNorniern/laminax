@@ -13,7 +13,7 @@ impl SpirvLowerer {
 }
 
 impl LowerToTarget for SpirvLowerer {
-    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
+    fn lower_lcir(&self, kernel: &laminax_lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
         lower_lcir_to_spirv(kernel)
     }
 
@@ -23,7 +23,7 @@ impl LowerToTarget for SpirvLowerer {
 }
 
 /// Lower LCIR kernel to SPIR-V binary (as hex string for now)
-pub fn lower_lcir_to_spirv(_kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
+pub fn lower_lcir_to_spirv(_kernel: &laminax_lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
     // TODO: Implement SPIR-V lowering
     // This would convert LCIR operations to SPIR-V bytecode
     Err(CodegenError::NotImplemented(
@@ -32,7 +32,7 @@ pub fn lower_lcir_to_spirv(_kernel: &laminax::lcir::Kernel) -> std::result::Resu
 }
 
 /// Lower LCIR kernel to OpenCL kernel source
-pub fn lower_lcir_to_opencl(_kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
+pub fn lower_lcir_to_opencl(_kernel: &laminax_lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
     // TODO: Implement OpenCL lowering
     // This would convert LCIR operations to OpenCL C kernel syntax
     Err(CodegenError::NotImplemented(
@@ -41,7 +41,7 @@ pub fn lower_lcir_to_opencl(_kernel: &laminax::lcir::Kernel) -> std::result::Res
 }
 
 /// Lower LCIR kernel to WGSL shader source
-pub fn lower_lcir_to_wgsl(_kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
+pub fn lower_lcir_to_wgsl(_kernel: &laminax_lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
     // TODO: Implement WGSL lowering
     // This would convert LCIR operations to WebGPU Shading Language
     Err(CodegenError::NotImplemented(

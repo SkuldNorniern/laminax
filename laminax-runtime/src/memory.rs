@@ -3,7 +3,7 @@
 //! Handles allocation, deallocation, and data transfer across different memory spaces.
 
 use super::Result;
-use laminax::{DType, Shape};
+use laminax_types::{DType, Shape};
 use laminax_types::Device;
 use std::sync::Arc;
 
