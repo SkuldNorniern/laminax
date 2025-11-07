@@ -19,12 +19,23 @@
 //!
 //! ```rust
 //! use laminax_codegen::{Backend, compile_from_lcir};
+//! use laminax::lcir::{KernelBuilder, MemoryScope};
+//! use laminax::{Shape, I32};
 //!
-//! // Compile LCIR kernel to CPU assembly
-//! let cpu_code = compile_from_lcir(&kernel, Backend::Cpu)?;
+//! fn example() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Create a simple LCIR kernel
+//!     let mut builder = KernelBuilder::new("example");
+//!     let tensor_id = builder.add_tensor("data", Shape::from([4]), I32, MemoryScope::Global);
+//!     let kernel = builder.build();
 //!
-//! // Compile LCIR kernel to Metal shader
-//! let metal_code = compile_from_lcir(&kernel, Backend::Metal)?;
+//!     // Compile LCIR kernel to CPU assembly
+//!     let cpu_code = compile_from_lcir(&kernel, Backend::Cpu)?;
+//!
+//!     // Compile LCIR kernel to Metal shader (placeholder)
+//!     // let metal_code = compile_from_lcir(&kernel, Backend::Metal)?;
+//!
+//!     Ok(())
+//! }
 //! ```
 
 #![forbid(unsafe_code)]
@@ -58,6 +69,22 @@ impl From<lamina::LaminaError> for CodegenError {
     }
 }
 
+impl std::error::Error for CodegenError {}
+
+impl std::fmt::Display for CodegenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CodegenError::Lamina(msg) => write!(f, "Lamina error: {}", msg),
+            CodegenError::UnsupportedTarget(target) => write!(f, "Unsupported target: {}", target),
+            CodegenError::NotImplemented(feature) => write!(f, "Not implemented: {}", feature),
+            CodegenError::InvalidIr(msg) => write!(f, "Invalid IR: {}", msg),
+            CodegenError::UnsupportedType { backend, dtype, reason } => {
+                write!(f, "Unsupported type {} on backend {}: {}", dtype, backend, reason)
+            }
+        }
+    }
+}
+
 
 /// Target backends supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +99,7 @@ pub trait ToLaminaIr {
     fn to_lamina_ir(&self) -> std::result::Result<String, CodegenError>;
 }
 
-impl ToLaminaIr for laminax::lcir::Kernel {
+impl ToLaminaIr for laminax_lcir::Kernel {
     fn to_lamina_ir(&self) -> std::result::Result<String, CodegenError> {
         lowering::lamina::lower_lcir_to_lamina(self)
     }
@@ -115,7 +142,7 @@ pub fn lower_and_compile<T: ToLaminaIr>(lowerable: &T, backend: Backend) -> std:
 }
 
 /// Compile directly from LCIR kernel to backend-specific binary.
-pub fn compile_from_lcir(kernel: &laminax::lcir::Kernel, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
+pub fn compile_from_lcir(kernel: &laminax_lcir::Kernel, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
     match backend {
         Backend::Cpu => {
             let backend = backends::cpu::CpuBackend::new();
