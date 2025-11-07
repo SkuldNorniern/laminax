@@ -10,12 +10,11 @@ pub mod lcir;
 // Re-export everything from our foundation crates for unified API
 pub use laminax_types::*; // Tensor API and types
 
-// Re-export from numina (excluding matmul which conflicts with DSL version)
+// Re-export additional items from numina (not already exported via laminax_types)
 pub use numina::{
-    Array, BFloat16, Bool, CpuBytesArray, DType, DTypeCandidate, DTypeLike, F32, F64, I8, I16, I32,
-    I64, NdArray, QuantizedI4, QuantizedU8, Shape, Strides, U8, U16, U32, U64, abs, acos, add,
-    add_scalar, argsort, asin, atan, cos, exp, log, max, mean, min, mul, pow, prod, sign, sin,
-    sort, sqrt, sum, tan, where_condition,
+    BFloat16, Bool, DTypeCandidate, DTypeLike, I8, I16, I32, I64, QuantizedI4, QuantizedU8,
+    U8, U16, U32, U64, abs, acos, add_scalar, argsort, asin, atan, cos, exp, log, pow, sign, sin,
+    sort, sqrt, tan, where_condition,
 };
 
 // Re-export DSL items
