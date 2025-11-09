@@ -33,6 +33,8 @@ pub enum LaminaxError {
     CompilationError(String),
     /// Runtime execution error
     RuntimeError(String),
+    /// Code generation error
+    CodegenError(String),
     /// Backend-specific error
     BackendError(String),
 }
@@ -45,6 +47,7 @@ impl std::fmt::Display for LaminaxError {
             LaminaxError::InvalidOperation(msg) => write!(f, "Invalid operation: {}", msg),
             LaminaxError::CompilationError(msg) => write!(f, "Compilation error: {}", msg),
             LaminaxError::RuntimeError(msg) => write!(f, "Runtime error: {}", msg),
+            LaminaxError::CodegenError(msg) => write!(f, "Code generation error: {}", msg),
             LaminaxError::BackendError(msg) => write!(f, "Backend error: {}", msg),
         }
     }
