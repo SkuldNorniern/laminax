@@ -12,9 +12,9 @@ pub use laminax_lcir as lcir; // LCIR types and builder
 
 // Re-export additional items from numina (not already exported via laminax_types)
 pub use numina::{
-    BFloat16, Bool, DTypeCandidate, DTypeLike, I8, I16, I32, I64, QuantizedI4, QuantizedU8,
-    U8, U16, U32, U64, abs, acos, add_scalar, argsort, asin, atan, cos, exp, log, pow, sign, sin,
-    sort, sqrt, tan, where_condition,
+    BFloat16, Bool, DTypeCandidate, DTypeLike, I8, I16, I32, I64, QuantizedI4, QuantizedU8, U8,
+    U16, U32, U64, abs, acos, add_scalar, argsort, asin, atan, cos, exp, log, pow, sign, sin, sort,
+    sqrt, tan, where_condition,
 };
 
 // Re-export DSL items
