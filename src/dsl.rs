@@ -139,7 +139,8 @@ impl Computation {
         // If schedules are applied, always use LCIR execution to apply them
         if !self.schedule.parallel_axes.is_empty()
             || !self.schedule.vectorized_axes.is_empty()
-            || !self.schedule.tiles.is_empty() {
+            || !self.schedule.tiles.is_empty()
+        {
             println!("Schedule detected - using LCIR execution to apply transformations");
             return self.run_via_lcir();
         }
@@ -161,7 +162,12 @@ impl Computation {
         // Add result tensor
         let result_shape = self.expr.shape().clone();
         let result_dtype = self.expr.dtype();
-        let result_tensor_id = builder.add_tensor("result", result_shape.clone(), result_dtype, MemoryScope::Global);
+        let result_tensor_id = builder.add_tensor(
+            "result",
+            result_shape.clone(),
+            result_dtype,
+            MemoryScope::Global,
+        );
 
         // Lower the expression to LCIR
         self.expr.lower_to_lcir(&mut builder, result_tensor_id)?;
@@ -172,11 +178,17 @@ impl Computation {
         // Build the kernel
         let kernel = builder.build();
 
-        println!("LCIR kernel built with {} tensors and {} operations", kernel.tensors.len(), kernel.operations.len());
-        println!("Schedule applied: {} parallel axes, {} vectorized axes, {} tiles",
-                 self.schedule.parallel_axes.len(),
-                 self.schedule.vectorized_axes.len(),
-                 self.schedule.tiles.len());
+        println!(
+            "LCIR kernel built with {} tensors and {} operations",
+            kernel.tensors.len(),
+            kernel.operations.len()
+        );
+        println!(
+            "Schedule applied: {} parallel axes, {} vectorized axes, {} tiles",
+            self.schedule.parallel_axes.len(),
+            self.schedule.vectorized_axes.len(),
+            self.schedule.tiles.len()
+        );
 
         // Extract input data from tensor expressions
         // This is a simplified implementation - in practice we'd traverse the expression tree
@@ -199,15 +211,27 @@ impl Computation {
                                 .chunks(4)
                                 .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
                                 .collect();
-                            Ok(Tensor::from_slice(&i32_data, result_shape, test_backend_factory))
+                            Ok(Tensor::from_slice(
+                                &i32_data,
+                                result_shape,
+                                test_backend_factory,
+                            ))
                         }
-                        _ => Err(LaminaxError::InvalidOperation(format!("Unsupported result dtype: {:?}", result_dtype))),
+                        _ => Err(LaminaxError::InvalidOperation(format!(
+                            "Unsupported result dtype: {:?}",
+                            result_dtype
+                        ))),
                     }
                 } else {
-                    Err(LaminaxError::InvalidOperation("No result tensor in LCIR output".to_string()))
+                    Err(LaminaxError::InvalidOperation(
+                        "No result tensor in LCIR output".to_string(),
+                    ))
                 }
             }
-            Err(e) => Err(LaminaxError::RuntimeError(format!("LCIR execution failed: {:?}", e))),
+            Err(e) => Err(LaminaxError::RuntimeError(format!(
+                "LCIR execution failed: {:?}",
+                e
+            ))),
         }
     }
 
@@ -256,9 +280,7 @@ impl Computation {
 
 /// Extract raw bytes from a tensor
 fn extract_tensor_bytes(tensor: &Tensor) -> std::result::Result<Vec<u8>, ()> {
-    unsafe {
-        Ok(tensor.as_bytes().to_vec())
-    }
+    unsafe { Ok(tensor.as_bytes().to_vec()) }
 }
 
 // ============================================================================
@@ -756,7 +778,10 @@ impl Schedule {
                 // 2. Creating inner loop: for i_inner from 0 to tile_size step 1
                 // 3. Updating all uses of the original loop variable
                 // This is quite complex and requires careful index arithmetic
-                println!("Tiling requested for axis {} with size {} (not yet implemented)", axis, tile_size);
+                println!(
+                    "Tiling requested for axis {} with size {} (not yet implemented)",
+                    axis, tile_size
+                );
             }
         }
 

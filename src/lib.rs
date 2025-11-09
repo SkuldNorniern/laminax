@@ -7,8 +7,8 @@
 pub mod dsl;
 
 // Re-export everything from our foundation crates for unified API
-pub use laminax_types::*; // Tensor API and types
-pub use laminax_lcir as lcir; // LCIR types and builder
+pub use laminax_lcir as lcir;
+pub use laminax_types::*; // Tensor API and types // LCIR types and builder
 
 // Re-export additional items from numina (not already exported via laminax_types)
 pub use numina::{
