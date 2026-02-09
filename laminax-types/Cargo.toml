@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-numina = "0.0.1"
+numina = { path = "../../numina" }
+laminax-dag = { path = "../laminax-dag" }
 

@@ -1,10 +1,12 @@
-//! Lamina Compute IR (LCIR) - Target-agnostic kernel representation
+//! Lamina Compute IR (LCIR) - Target-agnostic kernel and graph representation.
 //!
-//! LCIR provides explicit control over:
-//! - Loop structures and indices
-//! - Memory scopes (global, shared, local)
-//! - Synchronization barriers
-//! - Memory access patterns
+//! Laminax is a generic compute layer; graph nodes map to **operation chunks**
+//! (elementwise, linalg, reduction, copy, layout). Tensor execution is one consumer.
+//!
+//! - **LCIR-Kernel** (this file): loop/SSA-level IR for a single kernel.
+//! - **LCIR-Graph** ([`graph`]): DAG of ops and tensor dependencies (logical op order).
+
+pub mod graph;
 
 use laminax_types::{DType, Shape};
 use std::collections::HashMap;
@@ -336,6 +338,8 @@ pub mod access {
         tensor(tensor_id, indices, MemoryScope::Local)
     }
 }
+
+pub use graph::{Graph, GraphError, GraphResult, Node, NodeId, Op, TensorDesc, TensorRef};
 
 #[cfg(test)]
 mod tests {
