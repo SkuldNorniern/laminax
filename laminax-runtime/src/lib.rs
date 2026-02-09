@@ -12,10 +12,12 @@ pub mod device;
 pub mod execution;
 pub mod graph;
 pub mod memory;
+pub mod op_graph;
 
 pub use device::CpuDevice;
 pub use execution::{Executor, KernelInstance};
 pub use graph::{ComputationGraph, Edge, ExecutionPlan, Node};
+pub use op_graph::{execute_graph, execute_graph_parallel};
 pub use memory::{Buffer, MemoryManager};
 
 // Re-export device types from laminax-types
