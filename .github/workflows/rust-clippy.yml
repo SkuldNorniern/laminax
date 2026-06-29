@@ -24,6 +24,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
      
       - name: Run Clippy and Upload analysis results to GitHub
+        if: runner.os == 'Linux'
         uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

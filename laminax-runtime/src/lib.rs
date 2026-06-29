@@ -15,6 +15,11 @@ pub mod graph;
 pub mod memory;
 pub mod op_graph;
 
+#[cfg(any(feature = "hip", feature = "vulkan", feature = "cuda"))]
+pub mod zen;
+#[cfg(any(feature = "hip", feature = "vulkan", feature = "cuda"))]
+pub use zen::ZenEngine;
+
 pub use device::CpuDevice;
 pub use execution::{Executor, KernelInstance};
 pub use graph::{ComputationGraph, Edge, ExecutionPlan, Node};

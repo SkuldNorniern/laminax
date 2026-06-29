@@ -3,8 +3,15 @@ name = "laminax-runtime"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+hip    = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip"]
+vulkan = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/vulkan"]
+cuda   = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/cuda"]
+
 [dependencies]
 laminax-types = { path = "../laminax-types" }
 laminax-lcir = { path = "../laminax-lcir" }
 laminax-codegen = { path = "../laminax-codegen" }
-lamina = { path = "../../../lamina", features = ["encoder"] }
+lamina = { path = "../../lamina", features = ["encoder"] }
+zengpu        = { path = "/mnt/data2/Repository/ZenGPU", optional = true }
+zengpu-spirv  = { path = "/mnt/data2/Repository/ZenGPU/zengpu-spirv", optional = true }
