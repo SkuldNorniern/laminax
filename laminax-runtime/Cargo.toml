@@ -4,9 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-hip    = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip"]
-vulkan = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/vulkan"]
-cuda   = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/cuda"]
+gpu = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip", "zengpu/vulkan", "zengpu/cuda"]
 
 [dependencies]
 laminax-types = { path = "../laminax-types" }

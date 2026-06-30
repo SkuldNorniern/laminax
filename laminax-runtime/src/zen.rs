@@ -1,10 +1,10 @@
-#![cfg(any(feature = "hip", feature = "vulkan", feature = "cuda"))]
+#![cfg(feature = "gpu")]
 
 use std::sync::Arc;
 
 use zengpu::{
-    Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice, Instance, MemoryUsage,
-    Scalar, ShaderDesc,
+    BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice,
+    Instance, MemoryUsage, Scalar, ShaderDesc,
 };
 use zengpu_spirv::{ZslShader, zsl};
 
@@ -178,24 +178,17 @@ const POW: ZslShader = zsl!(
     }
 );
 
-fn pick<'a>(s: &'a ZslShader) -> (ShaderDesc<'a>, &'static str) {
-    #[cfg(feature = "hip")]
-    { return (ShaderDesc::hip(s.hip), "zsl_kernel"); }
-    #[cfg(all(not(feature = "hip"), feature = "cuda"))]
-    { return (ShaderDesc::cuda_src(s.cuda), "zsl_kernel"); }
-    #[cfg(all(not(feature = "hip"), not(feature = "cuda")))]
-    { (s.spirv_desc(), "main") }
-}
-
 pub struct ZenEngine {
     device: Arc<dyn GpuDevice>,
     #[allow(dead_code)]
     instance: Instance,
+    backend: BackendPreference,
 }
 
 impl ZenEngine {
     pub fn new() -> Result<Self> {
-        let instance = build_instance().map_err(|e| err(format!("ZenGPU init: {e}")))?;
+        let (instance, backend) = build_instance()
+            .map_err(|e| err(format!("ZenGPU init: {e}")))?;
         let adapters = instance.enumerate_adapters();
         if adapters.is_empty() {
             return Err(err("no ZenGPU adapters found"));
@@ -203,7 +196,7 @@ impl ZenEngine {
         let device: Arc<dyn GpuDevice> =
             Arc::from(adapters[0].open(zengpu::DeviceRequest::default())
                 .map_err(|e| err(format!("open device: {e}")))?);
-        Ok(Self { device, instance })
+        Ok(Self { device, instance, backend })
     }
 
     pub fn device_name(&self) -> String {
@@ -211,6 +204,14 @@ impl ZenEngine {
             .first()
             .map(|a| a.info().name.clone())
             .unwrap_or_else(|| "unknown".into())
+    }
+
+    pub fn backend(&self) -> BackendPreference {
+        self.backend
+    }
+
+    fn pick<'a>(&self, shader: &'a ZslShader) -> (ShaderDesc<'a>, &'static str) {
+        shader.for_backend(self.backend)
     }
 
     fn alloc(&self, n: usize) -> zengpu::Result<zengpu::BufferHandle> {
@@ -244,7 +245,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let (desc, entry) = pick(shader);
+        let (desc, entry) = self.pick(shader);
         let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
         let pipeline = self.device.create_compute_pipeline(ComputePipelineDesc {
             shader: sh, entry, block: [256, 1, 1],
@@ -281,7 +282,7 @@ impl ZenEngine {
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let (desc, entry) = pick(shader);
+        let (desc, entry) = self.pick(shader);
         let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
         let pipeline = self.device.create_compute_pipeline(ComputePipelineDesc {
             shader: sh, entry, block: [256, 1, 1],
@@ -344,7 +345,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(m * n).map_err(|e| err(e.to_string()))?;
 
-        let (desc, entry) = pick(&SGEMM);
+        let (desc, entry) = self.pick(&SGEMM);
         let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
         let pipeline = self.device.create_compute_pipeline(ComputePipelineDesc {
             shader: sh, entry, block: [16, 16, 1],
@@ -378,21 +379,18 @@ impl ZenEngine {
     }
 }
 
-fn build_instance() -> zengpu::Result<Instance> {
+fn build_instance() -> zengpu::Result<(Instance, BackendPreference)> {
     let b = Instance::builder();
 
-    #[cfg(feature = "hip")]
-    let b = match b.try_hip() {
-        Ok(b) | Err(b) => b,
-    };
+    if let Ok(b) = b.try_hip() {
+        return Ok((b.build(), BackendPreference::Hip));
+    }
 
-    #[cfg(feature = "vulkan")]
-    let b = match b.try_vulkan() {
-        Ok(b) | Err(b) => b,
-    };
+    let b = Instance::builder();
+    if let Ok(b) = b.try_vulkan() {
+        return Ok((b.build(), BackendPreference::Vulkan));
+    }
 
-    #[cfg(feature = "cuda")]
-    let b = b.cuda();
-
-    Ok(b.build())
+    let b = Instance::builder();
+    Ok((b.build(), BackendPreference::Auto))
 }
