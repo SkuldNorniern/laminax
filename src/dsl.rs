@@ -18,12 +18,24 @@ fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn Te
         dtype: DType,
     }
     impl TensorStorage for TestStorage {
-        fn shape(&self) -> &Shape { &self.shape }
-        fn strides(&self) -> &Strides { &self.strides }
-        fn len(&self) -> usize { self.shape.len() }
-        fn dtype(&self) -> DType { self.dtype }
-        unsafe fn as_bytes(&self) -> &[u8] { &self.data }
-        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { &mut self.data }
+        fn shape(&self) -> &Shape {
+            &self.shape
+        }
+        fn strides(&self) -> &Strides {
+            &self.strides
+        }
+        fn len(&self) -> usize {
+            self.shape.len()
+        }
+        fn dtype(&self) -> DType {
+            self.dtype
+        }
+        unsafe fn as_bytes(&self) -> &[u8] {
+            &self.data
+        }
+        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
+            &mut self.data
+        }
         fn clone_storage(&self) -> Box<dyn TensorStorage> {
             Box::new(TestStorage {
                 data: self.data.clone(),
@@ -32,14 +44,33 @@ fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn Te
                 dtype: self.dtype,
             })
         }
-        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
-        fn transpose(&self) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
-        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
-        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
-        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
+        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
+            unimplemented!()
+        }
+        fn transpose(&self) -> std::result::Result<Box<dyn TensorStorage>, String> {
+            unimplemented!()
+        }
+        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
+            unimplemented!()
+        }
+        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
+            unimplemented!()
+        }
+        fn new_array(
+            &self,
+            _: Shape,
+            _: DType,
+        ) -> std::result::Result<Box<dyn TensorStorage>, String> {
+            unimplemented!()
+        }
     }
     let strides = Strides::from_shape(&shape);
-    Box::new(TestStorage { data, shape, strides, dtype })
+    Box::new(TestStorage {
+        data,
+        shape,
+        strides,
+        dtype,
+    })
 }
 
 /// Core trait for DSL expressions that can be evaluated
