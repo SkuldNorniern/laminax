@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 laminax-types = { path = "../laminax-types" }
 laminax-lcir = { path = "../laminax-lcir" }
+laminax-codegen = { path = "../laminax-codegen" }
+lamina = { path = "../../../lamina", features = ["encoder"] }

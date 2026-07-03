@@ -1,12 +1,7 @@
-use std::sync::Arc;
 use laminax_types::{
-    Array, CpuBytesArray, Tensor, NdArray, Shape, Strides, DType,
+    Array, CpuBytesArray, CpuStorage, Tensor, NdArray, Shape, Strides, DType,
     add, mul, sum, F32,
-    // Backend arrays
-    CudaDevice, CudaArray, MetalDevice, MetalArray, RocmDevice, RocmArray,
-    GpuArray, CoralDevice, CoralArray, TpuDevice, TpuArray,
-    // Device trait
-    Device
+    CudaDevice, MetalDevice, RocmDevice, GpuArray, CoralDevice, TpuDevice, Device,
 };
 
 // Helper function to extract f32 data from NdArray
@@ -173,54 +168,12 @@ fn main() {
     println!("\n=== High-Level Tensor API ===");
     println!("Using laminax-types Tensor for simplified operations");
 
-    // Create tensors using the high-level API with backend factories
     let tensor_a = Tensor::from_slice(&data1, shape.clone(), |data, shape, dtype| {
-        // Simple demo backend - in real usage, users would choose their backend
-        struct DemoArray { data: Vec<u8>, shape: Shape, dtype: DType }
-        impl std::fmt::Debug for DemoArray {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "DemoArray{{ shape: {:?}, dtype: {:?} }}", self.shape, self.dtype)
-            }
-        }
-        impl NdArray for DemoArray {
-            fn shape(&self) -> &Shape { &self.shape }
-            fn strides(&self) -> &Strides { unimplemented!() }
-            fn len(&self) -> usize { self.shape.len() }
-            fn dtype(&self) -> DType { self.dtype }
-            unsafe fn as_bytes(&self) -> &[u8] { &self.data }
-            unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { unimplemented!() }
-            fn clone_array(&self) -> Box<dyn NdArray> { unimplemented!() }
-            fn reshape(&self, _: Shape) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn transpose(&self) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn zeros(&self, _: Shape) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn ones(&self, _: Shape) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn new_array(&self, _: Shape, _: DType) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-        }
-        Box::new(DemoArray { data, shape, dtype })
+        Box::new(CpuStorage::new(data, shape, dtype))
     });
 
     let tensor_b = Tensor::from_slice(&data2, shape.clone(), |data, shape, dtype| {
-        struct DemoArray { data: Vec<u8>, shape: Shape, dtype: DType }
-        impl std::fmt::Debug for DemoArray {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "DemoArray{{ shape: {:?}, dtype: {:?} }}", self.shape, self.dtype)
-            }
-        }
-        impl NdArray for DemoArray {
-            fn shape(&self) -> &Shape { &self.shape }
-            fn strides(&self) -> &Strides { unimplemented!() }
-            fn len(&self) -> usize { self.shape.len() }
-            fn dtype(&self) -> DType { self.dtype }
-            unsafe fn as_bytes(&self) -> &[u8] { &self.data }
-            unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { unimplemented!() }
-            fn clone_array(&self) -> Box<dyn NdArray> { unimplemented!() }
-            fn reshape(&self, _: Shape) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn transpose(&self) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn zeros(&self, _: Shape) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn ones(&self, _: Shape) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-            fn new_array(&self, _: Shape, _: DType) -> Result<Box<dyn NdArray>, String> { unimplemented!() }
-        }
-        Box::new(DemoArray { data, shape, dtype })
+        Box::new(CpuStorage::new(data, shape, dtype))
     });
 
     println!("Tensor A: {} with shape {:?}", tensor_a.dtype(), tensor_a.shape());

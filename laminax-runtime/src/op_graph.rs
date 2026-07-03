@@ -6,6 +6,100 @@
 //! are independent; execution is currently sequential per level.
 
 use super::Result;
+
+// ── Fast matmul (aarch64 NEON or scalar tiled) ───────────────────────────────
+// Duplicated from cetana::backend::cpu::compute — laminax-runtime cannot depend
+// on cetana (circular), and numina does not expose a generic f32 matmul yet.
+
+const TILE: usize = 32;
+
+#[allow(dead_code)]
+fn matmul_scalar_f32(c: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: usize) {
+    for i0 in (0..m).step_by(TILE) {
+        for l0 in (0..n).step_by(TILE) {
+            for j0 in (0..k).step_by(TILE) {
+                let i_end = (i0 + TILE).min(m);
+                let l_end = (l0 + TILE).min(n);
+                let j_end = (j0 + TILE).min(k);
+                for i in i0..i_end {
+                    for l in l0..l_end {
+                        let a_val = a[i * n + l];
+                        let c_row = i * k;
+                        let b_row = l * k;
+                        for j in j0..j_end {
+                            c[c_row + j] += a_val * b[b_row + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn matmul_neon_f32(c: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: usize) {
+    use std::arch::aarch64::*;
+    for i0 in (0..m).step_by(TILE) {
+        for l0 in (0..n).step_by(TILE) {
+            for j0 in (0..k).step_by(TILE) {
+                let i_end = (i0 + TILE).min(m);
+                let l_end = (l0 + TILE).min(n);
+                let j_end = (j0 + TILE).min(k);
+                let j_16end = j0 + ((j_end - j0) / 16) * 16;
+                let j_4end  = j0 + ((j_end - j0) / 4)  * 4;
+                for i in i0..i_end {
+                    for l in l0..l_end {
+                        let (a_val, va, c_ptr, b_ptr) = unsafe {
+                            let av = *a.get_unchecked(i * n + l);
+                            (av, vdupq_n_f32(av), c.as_mut_ptr().add(i * k), b.as_ptr().add(l * k))
+                        };
+                        let mut j = j0;
+                        while j < j_16end {
+                            unsafe {
+                                let vb0 = vld1q_f32(b_ptr.add(j));
+                                let vb1 = vld1q_f32(b_ptr.add(j + 4));
+                                let vb2 = vld1q_f32(b_ptr.add(j + 8));
+                                let vb3 = vld1q_f32(b_ptr.add(j + 12));
+                                let vc0 = vld1q_f32(c_ptr.add(j));
+                                let vc1 = vld1q_f32(c_ptr.add(j + 4));
+                                let vc2 = vld1q_f32(c_ptr.add(j + 8));
+                                let vc3 = vld1q_f32(c_ptr.add(j + 12));
+                                vst1q_f32(c_ptr.add(j),      vfmaq_f32(vc0, va, vb0));
+                                vst1q_f32(c_ptr.add(j + 4),  vfmaq_f32(vc1, va, vb1));
+                                vst1q_f32(c_ptr.add(j + 8),  vfmaq_f32(vc2, va, vb2));
+                                vst1q_f32(c_ptr.add(j + 12), vfmaq_f32(vc3, va, vb3));
+                            }
+                            j += 16;
+                        }
+                        while j < j_4end {
+                            unsafe {
+                                let vb = vld1q_f32(b_ptr.add(j));
+                                let vc = vld1q_f32(c_ptr.add(j));
+                                vst1q_f32(c_ptr.add(j), vfmaq_f32(vc, va, vb));
+                            }
+                            j += 4;
+                        }
+                        while j < j_end {
+                            unsafe { *c_ptr.add(j) += a_val * *b_ptr.add(j); }
+                            j += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Tiled matmul: C[m×k] = A[m×n] × B[n×k]. Uses NEON on aarch64, scalar elsewhere.
+fn fast_matmul_f32(a: &[f32], b: &[f32], m: usize, n: usize, k: usize) -> Vec<f32> {
+    let mut c = vec![0.0f32; m * k];
+    #[cfg(target_arch = "aarch64")]
+    unsafe { matmul_neon_f32(&mut c, a, b, m, n, k); }
+    #[cfg(not(target_arch = "aarch64"))]
+    matmul_scalar_f32(&mut c, a, b, m, n, k);
+    c
+}
 use laminax_lcir::{Graph, Node, NodeId, Op, TensorRef};
 use laminax_types::DTypeId;
 
@@ -91,17 +185,7 @@ fn run_one_node(
             }
             let a = &input_buffers[0];
             let b = &input_buffers[1];
-            let mut out = vec![0.0_f32; m * k];
-            for i in 0..m {
-                for j in 0..k {
-                    let mut sum = 0.0_f32;
-                    for q in 0..n {
-                        sum += a[i * n + q] * b[q * k + j];
-                    }
-                    out[i * k + j] = sum;
-                }
-            }
-            out
+            fast_matmul_f32(a, b, m, n, k)
         }
         Op::Copy => {
             if node.inputs.len() != 1 {
@@ -254,7 +338,7 @@ fn out_multi_to_in_flat(
 
 /// Executes an LCIR-Graph on CPU with the given inputs (F32 only).
 ///
-/// `input_data` and `input_shapes` must have length `graph.input_count`; each
+/// `input_data` and `input_shapes` must have length `graph.input_count()`; each
 /// `input_data[i]` must have length equal to the product of `input_shapes[i]`.
 /// Returns one buffer per graph node (in node order). Nodes in the same
 /// parallel level are independent; execution runs levels in order, nodes within
@@ -264,10 +348,10 @@ pub fn execute_graph(
     input_data: &[Vec<f32>],
     input_shapes: &[Vec<usize>],
 ) -> Result<Vec<Vec<f32>>> {
-    if graph.input_count != input_data.len() || graph.input_count != input_shapes.len() {
+    if graph.input_count() != input_data.len() || graph.input_count() != input_shapes.len() {
         return Err(super::RuntimeError::Graph(format!(
             "graph has {} inputs but got {} data and {} shape buffers",
-            graph.input_count,
+            graph.input_count(),
             input_data.len(),
             input_shapes.len()
         )));
@@ -286,11 +370,11 @@ pub fn execute_graph(
         }
     }
 
-    let input_count = graph.input_count;
+    let input_count = graph.input_count();
     let mut buffers: Vec<Vec<f32>> = input_data.to_vec();
     let mut shapes: Vec<Vec<usize>> = input_shapes.to_vec();
 
-    for node in &graph.nodes {
+    for node in graph.nodes() {
         if node.output.dtype_id != DTypeId::F32 {
             return Err(super::RuntimeError::Execution(
                 "only F32 dtype is supported for graph execution".to_string(),
@@ -333,10 +417,10 @@ pub fn execute_graph_parallel(
     input_data: &[Vec<f32>],
     input_shapes: &[Vec<usize>],
 ) -> Result<Vec<Vec<f32>>> {
-    if graph.input_count != input_data.len() || graph.input_count != input_shapes.len() {
+    if graph.input_count() != input_data.len() || graph.input_count() != input_shapes.len() {
         return Err(super::RuntimeError::Graph(format!(
             "graph has {} inputs but got {} data and {} shape buffers",
-            graph.input_count,
+            graph.input_count(),
             input_data.len(),
             input_shapes.len()
         )));
@@ -355,11 +439,11 @@ pub fn execute_graph_parallel(
         }
     }
 
-    let input_count = graph.input_count;
+    let input_count = graph.input_count();
     let mut buffers: Vec<Vec<f32>> = input_data.to_vec();
     let mut shapes: Vec<Vec<usize>> = input_shapes.to_vec();
 
-    for node in &graph.nodes {
+    for node in graph.nodes() {
         if node.output.dtype_id != DTypeId::F32 {
             return Err(super::RuntimeError::Execution(
                 "only F32 dtype is supported for graph execution".to_string(),

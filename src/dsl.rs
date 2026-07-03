@@ -5,67 +5,41 @@
 
 use crate::lcir::{BinaryOp, KernelBuilder, LoopId, MemoryScope, TensorId, UnaryOp, access, index};
 use crate::{DType, LaminaxError, NdArray, Result, Shape, Tensor};
+use laminax_types::TensorStorage;
 
 // Test backend factory for DSL tests
-fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn NdArray> {
-    struct TestArray {
+fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn TensorStorage> {
+    use laminax_types::Strides;
+    #[derive(Debug)]
+    struct TestStorage {
         data: Vec<u8>,
         shape: Shape,
+        strides: Strides,
         dtype: DType,
     }
-    impl std::fmt::Debug for TestArray {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(
-                f,
-                "TestArray{{ shape: {:?}, dtype: {:?} }}",
-                self.shape, self.dtype
-            )
-        }
-    }
-    impl NdArray for TestArray {
-        fn shape(&self) -> &Shape {
-            &self.shape
-        }
-        fn strides(&self) -> &crate::Strides {
-            // Strides are not actually used in these tests, so panic if called
-            panic!("strides not implemented for test backend")
-        }
-        fn len(&self) -> usize {
-            self.shape.len()
-        }
-        fn dtype(&self) -> DType {
-            self.dtype
-        }
-        unsafe fn as_bytes(&self) -> &[u8] {
-            &self.data
-        }
-        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
-            unimplemented!()
-        }
-        fn clone_array(&self) -> Box<dyn NdArray> {
-            Box::new(TestArray {
+    impl TensorStorage for TestStorage {
+        fn shape(&self) -> &Shape { &self.shape }
+        fn strides(&self) -> &Strides { &self.strides }
+        fn len(&self) -> usize { self.shape.len() }
+        fn dtype(&self) -> DType { self.dtype }
+        unsafe fn as_bytes(&self) -> &[u8] { &self.data }
+        unsafe fn as_mut_bytes(&mut self) -> &mut [u8] { &mut self.data }
+        fn clone_storage(&self) -> Box<dyn TensorStorage> {
+            Box::new(TestStorage {
                 data: self.data.clone(),
                 shape: self.shape.clone(),
+                strides: self.strides.clone(),
                 dtype: self.dtype,
             })
         }
-        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
-            unimplemented!()
-        }
-        fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> {
-            unimplemented!()
-        }
-        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
-            unimplemented!()
-        }
-        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
-            unimplemented!()
-        }
-        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> {
-            unimplemented!()
-        }
+        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
+        fn transpose(&self) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
+        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
+        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
+        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn TensorStorage>, String> { unimplemented!() }
     }
-    Box::new(TestArray { data, shape, dtype })
+    let strides = Strides::from_shape(&shape);
+    Box::new(TestStorage { data, shape, strides, dtype })
 }
 
 /// Core trait for DSL expressions that can be evaluated
@@ -280,7 +254,7 @@ impl Computation {
 
 /// Extract raw bytes from a tensor
 fn extract_tensor_bytes(tensor: &Tensor) -> std::result::Result<Vec<u8>, ()> {
-    unsafe { Ok(tensor.as_bytes().to_vec()) }
+    unsafe { Ok(<Tensor as NdArray>::as_bytes(tensor).to_vec()) }
 }
 
 // ============================================================================

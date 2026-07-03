@@ -8,6 +8,7 @@ use laminax_lcir::{self as lcir, MemoryScope};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub mod aot;
 pub mod device;
 pub mod execution;
 pub mod graph;
