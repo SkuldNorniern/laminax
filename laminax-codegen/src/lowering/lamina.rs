@@ -13,7 +13,7 @@ impl LaminaLowerer {
 }
 
 impl LowerToTarget for LaminaLowerer {
-    fn lower_lcir(&self, kernel: &laminax::lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
+    fn lower_lcir(&self, kernel: &laminax_lcir::Kernel) -> std::result::Result<String, crate::CodegenError> {
         lower_lcir_to_lamina(kernel)
     }
 

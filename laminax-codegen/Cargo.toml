@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lamina = { path = "../../../lamina", features = ["encoder"] }
-laminax = { path = "../" }
+lamina = { path = "../../lamina", features = ["encoder"] }
+laminax = { package = "laminax-types", path = "../laminax-types" }
 laminax-lcir = { path = "../laminax-lcir" }
