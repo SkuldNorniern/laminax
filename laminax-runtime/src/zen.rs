@@ -266,6 +266,19 @@ struct CachedPipeline {
 /// Max recycled buffers kept per size bucket.
 const POOL_BUCKET_CAP: usize = 32;
 
+/// An owned device-resident f32 buffer. Free it with [`ZenEngine::free_dev`] (returns it to the
+/// pool) — it does NOT free on Drop (no engine handle here).
+pub struct DevTensor {
+    pub(crate) buf: zengpu::BufferHandle,
+    pub(crate) len: usize,
+}
+
+impl DevTensor {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+}
+
 pub struct ZenEngine {
     device: Arc<dyn GpuDevice>,
     #[allow(dead_code)]
@@ -412,6 +425,122 @@ impl ZenEngine {
     fn download(&self, buf: zengpu::BufferHandle, n: usize) -> zengpu::Result<Vec<f32>> {
         let raw = self.device.read_buffer(buf, 0, (n * 4) as u64)?;
         Ok(cast_u8(&raw).to_vec())
+    }
+
+    pub fn upload_dev(&self, data: &[f32]) -> Result<DevTensor> {
+        let buf = self.upload(data).map_err(|e| err(e.to_string()))?;
+        Ok(DevTensor { buf, len: data.len() })
+    }
+
+    pub fn alloc_dev(&self, len: usize) -> Result<DevTensor> {
+        let buf = self.alloc(len).map_err(|e| err(e.to_string()))?;
+        Ok(DevTensor { buf, len })
+    }
+
+    pub fn download_dev(&self, t: &DevTensor) -> Result<Vec<f32>> {
+        self.download(t.buf, t.len).map_err(|e| err(e.to_string()))
+    }
+
+    pub fn free_dev(&self, t: DevTensor) {
+        self.recycle(t.buf, t.len);
+    }
+
+    pub fn matmul_dev(
+        &self,
+        a: &DevTensor,
+        b: &DevTensor,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<DevTensor> {
+        let c = self.alloc_dev(m * n)?;
+
+        let pipeline = if self.backend == BackendPreference::Hip {
+            self.pipeline_hip("sgemm_tiled", TILED_SGEMM_HIP, [16, 16, 1])?
+        } else {
+            self.pipeline_for(&SGEMM, "sgemm", [16, 16, 1])?
+        };
+
+        let bindings = Bindings {
+            buffers:  &[a.buf.index(), b.buf.index(), c.buf.index()],
+            textures: &[],
+            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+        };
+        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
+        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+
+        Ok(c)
+    }
+
+    pub fn matmul_batched_dev(
+        &self,
+        a: &DevTensor,
+        b: &DevTensor,
+        batch: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<DevTensor> {
+        let c = self.alloc_dev(batch * m * n)?;
+
+        let pipeline = if self.backend == BackendPreference::Hip {
+            self.pipeline_hip("bgemm_tiled", TILED_BGEMM_HIP, [16, 16, 1])?
+        } else {
+            self.pipeline_for(&BGEMM, "bgemm", [16, 16, 1])?
+        };
+
+        let bindings = Bindings {
+            buffers:  &[a.buf.index(), b.buf.index(), c.buf.index()],
+            textures: &[],
+            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+        };
+        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
+        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+
+        Ok(c)
+    }
+
+    fn run_binary_dev(
+        &self,
+        a: &DevTensor,
+        b: &DevTensor,
+        shader: &ZslShader,
+        name: &'static str,
+    ) -> Result<DevTensor> {
+        if a.len != b.len {
+            return Err(err(format!(
+                "device tensor length mismatch: {} != {}",
+                a.len, b.len
+            )));
+        }
+
+        let c = self.alloc_dev(a.len)?;
+        let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers:  &[a.buf.index(), b.buf.index(), c.buf.index()],
+            textures: &[],
+            scalars:  &[Scalar::U32(a.len as u32)],
+        };
+        let grid = [(a.len as u32 + 255) / 256, 1, 1];
+        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+
+        Ok(c)
+    }
+
+    pub fn add_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
+        self.run_binary_dev(a, b, &ADD, "add")
+    }
+
+    pub fn sub_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
+        self.run_binary_dev(a, b, &SUB, "sub")
+    }
+
+    pub fn mul_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
+        self.run_binary_dev(a, b, &MUL, "mul")
+    }
+
+    pub fn div_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
+        self.run_binary_dev(a, b, &DIV, "div")
     }
 
     fn run_binary(
@@ -613,4 +742,55 @@ fn build_instance() -> zengpu::Result<(Instance, BackendPreference)> {
 
     let b = Instance::builder();
     Ok((b.build(), BackendPreference::Auto))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dev_resident_matmul() -> Result<()> {
+        let engine = match ZenEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => {
+                println!("skipping dev_resident_matmul: {error}");
+                return Ok(());
+            }
+        };
+
+        const SIZE: usize = 64;
+        let a: Vec<f32> = (0..SIZE * SIZE)
+            .map(|i| ((i * 17 + 3) % 101) as f32 / 101.0)
+            .collect();
+        let b: Vec<f32> = (0..SIZE * SIZE)
+            .map(|i| ((i * 29 + 7) % 103) as f32 / 103.0)
+            .collect();
+        let mut expected = vec![0.0; SIZE * SIZE];
+        for row in 0..SIZE {
+            for col in 0..SIZE {
+                for inner in 0..SIZE {
+                    expected[row * SIZE + col] +=
+                        a[row * SIZE + inner] * b[inner * SIZE + col];
+                }
+            }
+        }
+
+        let da = engine.upload_dev(&a)?;
+        let db = engine.upload_dev(&b)?;
+        let dc = engine.matmul_dev(&da, &db, SIZE, SIZE, SIZE)?;
+        let actual = engine.download_dev(&dc)?;
+        let max_err = actual
+            .iter()
+            .zip(&expected)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        println!("dev_resident max err: {max_err}");
+
+        engine.free_dev(da);
+        engine.free_dev(db);
+        engine.free_dev(dc);
+
+        assert!(max_err < 1e-3, "max error {max_err} exceeded tolerance");
+        Ok(())
+    }
 }
