@@ -231,15 +231,24 @@ pub struct ZenEngine {
 
 impl ZenEngine {
     pub fn new() -> Result<Self> {
+        Self::with_adapter(0)
+    }
+
+    /// Open the `index`-th GPU adapter. Each engine owns one device; for multi-GPU,
+    /// create one engine per adapter and drive them from separate threads.
+    pub fn with_adapter(index: usize) -> Result<Self> {
         let (instance, backend) = build_instance()
             .map_err(|e| err(format!("ZenGPU init: {e}")))?;
         let adapters = instance.enumerate_adapters();
         if adapters.is_empty() {
             return Err(err("no ZenGPU adapters found"));
         }
-        let device_name = adapters[0].info().name.clone();
+        let adapter = adapters
+            .get(index)
+            .ok_or_else(|| err(format!("adapter {index} out of range ({} found)", adapters.len())))?;
+        let device_name = adapter.info().name.clone();
         let device: Arc<dyn GpuDevice> =
-            Arc::from(adapters[0].open(zengpu::DeviceRequest::default())
+            Arc::from(adapter.open(zengpu::DeviceRequest::default())
                 .map_err(|e| err(format!("open device: {e}")))?);
         Ok(Self {
             device,
@@ -249,6 +258,13 @@ impl ZenEngine {
             pipelines: Mutex::new(HashMap::new()),
             pool: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Number of GPU adapters visible to the preferred backend.
+    pub fn adapter_count() -> usize {
+        build_instance()
+            .map(|(instance, _)| instance.enumerate_adapters().len())
+            .unwrap_or(0)
     }
 
     pub fn device_name(&self) -> String {
