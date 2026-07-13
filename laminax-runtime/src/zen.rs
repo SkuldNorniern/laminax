@@ -383,6 +383,24 @@ void zsl_kernel(float* __restrict__ out, unsigned int N) {
 }
 "#;
 
+const ADAM_STEP_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(float* __restrict__ w, const float* __restrict__ g,
+                float* __restrict__ m, float* __restrict__ v,
+                float lr, float b1, float b2, float eps, float wd,
+                float bc1, float bc2, unsigned int N) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x; if(i>=N)return;
+  float gi=g[i];
+  float mi=b1*m[i]+(1.f-b1)*gi;
+  float vi=b2*v[i]+(1.f-b2)*gi*gi;
+  m[i]=mi; v[i]=vi;
+  float wi=w[i];
+  if(wd!=0.f)wi-=lr*wd*wi;
+  wi-=lr*(mi/bc1)/(sqrtf(vi/bc2)+eps);
+  w[i]=wi;
+}
+"#;
+
 const ADD: ZslShader = zsl!(
     push P { n: u32 }
     @workgroup_size(256)
@@ -1102,6 +1120,52 @@ impl ZenEngine {
             scalars: &[Scalar::U32(out.len as u32)],
         };
         self.dispatch_profiled(pipeline, bindings, [(out.len as u32 + 255) / 256, 1, 1])
+    }
+
+    pub fn zeros_dev(&self, len: usize) -> Result<DevTensor> {
+        let out = self.alloc_dev(len)?;
+        if let Err(error) = self.zero_dev(&out) {
+            self.free_dev(out);
+            return Err(error);
+        }
+        Ok(out)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn adam_step_dev(
+        &self,
+        w: &DevTensor,
+        g: &DevTensor,
+        m: &mut DevTensor,
+        v: &mut DevTensor,
+        lr: f32,
+        b1: f32,
+        b2: f32,
+        eps: f32,
+        wd: f32,
+        bc1: f32,
+        bc2: f32,
+        n: usize,
+    ) -> Result<()> {
+        if w.len != n || g.len != n || m.len != n || v.len != n {
+            return Err(err("adam_step_dev input length mismatch"));
+        }
+        let pipeline = self.pipeline_hip("adam_step", ADAM_STEP_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[w.buf.index(), g.buf.index(), m.buf.index(), v.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::F32(lr),
+                Scalar::F32(b1),
+                Scalar::F32(b2),
+                Scalar::F32(eps),
+                Scalar::F32(wd),
+                Scalar::F32(bc1),
+                Scalar::F32(bc2),
+                Scalar::U32(n as u32),
+            ],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(n as u32 + 255) / 256, 1, 1])
     }
 
     pub fn cross_entropy_dev(
