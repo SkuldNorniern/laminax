@@ -150,6 +150,50 @@ void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
 }
 "#;
 
+const COPY_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ out, unsigned int N) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) out[i] = x[i];
+}
+"#;
+
+const SCALE_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ out,
+                unsigned int N, float scale) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) out[i] = x[i] * scale;
+}
+"#;
+
+const TRANSPOSE2D_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ out,
+                unsigned int rows, unsigned int cols) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int n = rows * cols;
+    if (i < n) {
+        unsigned int r = i / cols, c = i - r * cols;
+        out[c * rows + r] = x[i];
+    }
+}
+"#;
+
+const TRANSPOSE_LAST2_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ out,
+                unsigned int batch, unsigned int rows, unsigned int cols) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int plane = rows * cols, n = batch * plane;
+    if (i < n) {
+        unsigned int b = i / plane, p = i - b * plane;
+        unsigned int r = p / cols, c = p - r * cols;
+        out[b * plane + c * rows + r] = x[i];
+    }
+}
+"#;
+
 const SOFTMAX_FWD_HIP: &str = r#"
 extern "C" __global__ __launch_bounds__(256)
 void zsl_kernel(const float* __restrict__ x, float* __restrict__ y,
@@ -687,6 +731,58 @@ impl ZenEngine {
 
     pub fn div_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
         self.run_binary_dev(a, b, &DIV, "div")
+    }
+
+    pub fn copy_dev(&self, x: &DevTensor) -> Result<DevTensor> {
+        let out = self.alloc_dev(x.len)?;
+        let pipeline = self.pipeline_hip("copy", COPY_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(x.len as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
+    }
+
+    pub fn scale_dev(&self, x: &DevTensor, scale: f32) -> Result<DevTensor> {
+        let out = self.alloc_dev(x.len)?;
+        let pipeline = self.pipeline_hip("scale", SCALE_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(x.len as u32), Scalar::F32(scale)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
+    }
+
+    pub fn transpose2d_dev(&self, x: &DevTensor, rows: usize, cols: usize) -> Result<DevTensor> {
+        if x.len != rows * cols { return Err(err("transpose2d_dev input length mismatch")); }
+        let out = self.alloc_dev(x.len)?;
+        let pipeline = self.pipeline_hip("transpose2d", TRANSPOSE2D_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), out.buf.index()], textures: &[],
+            scalars: &[Scalar::U32(rows as u32), Scalar::U32(cols as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
+    }
+
+    pub fn transpose_last2_dev(
+        &self, x: &DevTensor, batch: usize, rows: usize, cols: usize,
+    ) -> Result<DevTensor> {
+        if x.len != batch * rows * cols {
+            return Err(err("transpose_last2_dev input length mismatch"));
+        }
+        let out = self.alloc_dev(x.len)?;
+        let pipeline = self.pipeline_hip("transpose_last2", TRANSPOSE_LAST2_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), out.buf.index()], textures: &[],
+            scalars: &[Scalar::U32(batch as u32), Scalar::U32(rows as u32), Scalar::U32(cols as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
     }
 
     pub fn softmax_dev(&self, x: &DevTensor, rows: usize, d: usize) -> Result<DevTensor> {
