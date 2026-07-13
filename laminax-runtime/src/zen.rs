@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use zengpu::{
     BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice, Instance,
-    MemoryUsage, Scalar, ShaderDesc,
+    MemoryUsage, PipelineHandle, Scalar, ShaderDesc,
 };
 use zengpu_spirv::{ZslShader, zsl};
 
@@ -50,49 +50,274 @@ fn cast_u8(v: &[u8]) -> &[f32] {
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const f32, v.len() / 4) }
 }
 
-const SGEMM: ZslShader = zsl!(
+const TILED_SGEMM_ZSL: ZslShader = zsl!(
     push P { m: u32, n: u32, k: u32 }
     @workgroup_size(16, 16)
-    kernel sgemm(
-        id: global_id,
+    kernel tiled_sgemm(
         a: device buffer<f32>,
         b: device buffer<f32>,
         c: device mut buffer<f32>,
         p: P,
     ) {
-        let row = id.y
-        let col = id.x
-        if row < p.m && col < p.n {
-            let sum: f32 = 0.0
-            for i in 0..p.k {
-                sum = sum + a[row * p.k + i] * b[i * p.n + col]
+        shared as_tile: array<f32, 256>
+        shared bs_tile: array<f32, 256>
+        let lx = local_id().x
+        let ly = local_id().y
+        let row = group_id().y * 16 + ly
+        let col = group_id().x * 16 + lx
+        let sum: f32 = 0.0
+        let tile_count = (p.k + 15) / 16
+        for tile in 0..tile_count {
+            let ak = tile * 16 + lx
+            let bk = tile * 16 + ly
+            if row < p.m && ak < p.k {
+                as_tile[ly * 16 + lx] = a[row * p.k + ak]
+            } else {
+                as_tile[ly * 16 + lx] = 0.0
             }
+            if bk < p.k && col < p.n {
+                bs_tile[ly * 16 + lx] = b[bk * p.n + col]
+            } else {
+                bs_tile[ly * 16 + lx] = 0.0
+            }
+            barrier()
+            for q in 0..16 {
+                sum = sum + as_tile[ly * 16 + q] * bs_tile[q * 16 + lx]
+            }
+            barrier()
+        }
+        if row < p.m && col < p.n {
             c[row * p.n + col] = sum
         }
     }
 );
 
-const BGEMM: ZslShader = zsl!(
+const TILED_BGEMM_ZSL: ZslShader = zsl!(
     push P { m: u32, n: u32, k: u32 }
     @workgroup_size(16, 16)
-    kernel bgemm(
-        id: global_id,
+    kernel tiled_bgemm(
         a: device buffer<f32>,
         b: device buffer<f32>,
         c: device mut buffer<f32>,
         p: P,
     ) {
-        let row = id.y
-        let col = id.x
-        let batch = id.z
-        if row < p.m && col < p.n {
-            let ao = batch * p.m * p.k
-            let bo = batch * p.k * p.n
-            let sum: f32 = 0.0
-            for i in 0..p.k {
-                sum = sum + a[ao + row * p.k + i] * b[bo + i * p.n + col]
+        shared as_tile: array<f32, 256>
+        shared bs_tile: array<f32, 256>
+        let lx = local_id().x
+        let ly = local_id().y
+        let row = group_id().y * 16 + ly
+        let col = group_id().x * 16 + lx
+        let batch = group_id().z
+        let ao = batch * p.m * p.k
+        let bo = batch * p.k * p.n
+        let sum: f32 = 0.0
+        let tile_count = (p.k + 15) / 16
+        for tile in 0..tile_count {
+            let ak = tile * 16 + lx
+            let bk = tile * 16 + ly
+            if row < p.m && ak < p.k {
+                as_tile[ly * 16 + lx] = a[ao + row * p.k + ak]
+            } else {
+                as_tile[ly * 16 + lx] = 0.0
             }
+            if bk < p.k && col < p.n {
+                bs_tile[ly * 16 + lx] = b[bo + bk * p.n + col]
+            } else {
+                bs_tile[ly * 16 + lx] = 0.0
+            }
+            barrier()
+            for q in 0..16 {
+                sum = sum + as_tile[ly * 16 + q] * bs_tile[q * 16 + lx]
+            }
+            barrier()
+        }
+        if row < p.m && col < p.n {
             c[batch * p.m * p.n + row * p.n + col] = sum
+        }
+    }
+);
+
+const SOFTMAX_FWD_ZSL: ZslShader = zsl!(
+    push P { rows: u32, d: u32 }
+    @workgroup_size(256)
+    kernel softmax_fwd(
+        x: device buffer<f32>,
+        y: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let r = id.x
+        if r < p.rows {
+            let base = r * p.d
+            let m: f32 = -3.402823e38
+            for j in 0..p.d {
+                m = max(m, x[base + j])
+            }
+            let sum: f32 = 0.0
+            for j in 0..p.d {
+                let e = exp(x[base + j] - m)
+                y[base + j] = e
+                sum = sum + e
+            }
+            let inv = 1.0 / sum
+            for j in 0..p.d {
+                y[base + j] = y[base + j] * inv
+            }
+        }
+    }
+);
+
+const SOFTMAX_BWD_ZSL: ZslShader = zsl!(
+    push P { rows: u32, d: u32 }
+    @workgroup_size(256)
+    kernel softmax_bwd(
+        y: device buffer<f32>,
+        g: device buffer<f32>,
+        dx: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let r = id.x
+        if r < p.rows {
+            let base = r * p.d
+            let dot: f32 = 0.0
+            for j in 0..p.d {
+                dot = dot + g[base + j] * y[base + j]
+            }
+            for j in 0..p.d {
+                dx[base + j] = y[base + j] * (g[base + j] - dot)
+            }
+        }
+    }
+);
+
+const GELU_FWD_ZSL: ZslShader = zsl!(
+    push P { n: u32 }
+    @workgroup_size(256)
+    kernel gelu_fwd(
+        x: device buffer<f32>,
+        y: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n {
+            let v = x[i]
+            let t = tanh(0.7978845608 * (v + 0.044715 * v * v * v))
+            y[i] = 0.5 * v * (1.0 + t)
+        }
+    }
+);
+
+const GELU_BWD_ZSL: ZslShader = zsl!(
+    push P { n: u32 }
+    @workgroup_size(256)
+    kernel gelu_bwd(
+        x: device buffer<f32>,
+        g: device buffer<f32>,
+        dx: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n {
+            let v = x[i]
+            let inner = 0.7978845608 * (v + 0.044715 * v * v * v)
+            let t = tanh(inner)
+            let dinner = 0.7978845608 * (1.0 + 3.0 * 0.044715 * v * v)
+            let dt = (1.0 - t * t) * dinner
+            dx[i] = g[i] * (0.5 * (1.0 + t) + 0.5 * v * dt)
+        }
+    }
+);
+
+const ZERO_PAIR_ZSL: ZslShader = zsl!(
+    push P { n: u32 }
+    @workgroup_size(256)
+    kernel zero_pair(
+        a: device mut buffer<f32>,
+        b: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n {
+            a[i] = 0.0
+            b[i] = 0.0
+        }
+    }
+);
+
+const LAYERNORM_FWD_ZSL: ZslShader = zsl!(
+    push P { rows: u32, d: u32, eps: f32 }
+    @workgroup_size(256)
+    kernel layernorm_fwd(
+        x: device buffer<f32>,
+        gamma: device buffer<f32>,
+        beta: device buffer<f32>,
+        out: device mut buffer<f32>,
+        xhat: device mut buffer<f32>,
+        invstd: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let r = id.x
+        if r < p.rows {
+            let base = r * p.d
+            let mean: f32 = 0.0
+            for j in 0..p.d {
+                mean = mean + x[base + j]
+            }
+            mean = mean / p.d
+            let var: f32 = 0.0
+            for j in 0..p.d {
+                let delta = x[base + j] - mean
+                var = var + delta * delta
+            }
+            var = var / p.d
+            let is = 1.0 / sqrt(var + p.eps)
+            invstd[r] = is
+            for j in 0..p.d {
+                let h = (x[base + j] - mean) * is
+                xhat[base + j] = h
+                out[base + j] = h * gamma[j] + beta[j]
+            }
+        }
+    }
+);
+
+const LAYERNORM_BWD_ZSL: ZslShader = zsl!(
+    push P { rows: u32, d: u32 }
+    @workgroup_size(256)
+    kernel layernorm_bwd(
+        g: device buffer<f32>,
+        xhat: device buffer<f32>,
+        invstd: device buffer<f32>,
+        gamma: device buffer<f32>,
+        dx: device mut buffer<f32>,
+        dgamma: device mut buffer<f32>,
+        dbeta: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let r = id.x
+        if r < p.rows {
+            let base = r * p.d
+            let md: f32 = 0.0
+            let mdx: f32 = 0.0
+            for j in 0..p.d {
+                let dh = g[base + j] * gamma[j]
+                md = md + dh
+                mdx = mdx + dh * xhat[base + j]
+            }
+            md = md / p.d
+            mdx = mdx / p.d
+            for j in 0..p.d {
+                let dh = g[base + j] * gamma[j]
+                dx[base + j] = invstd[r] * (dh - md - xhat[base + j] * mdx)
+                atomic_add(dgamma, j, g[base + j] * xhat[base + j])
+                atomic_add(dbeta, j, g[base + j])
+            }
         }
     }
 );
@@ -566,7 +791,7 @@ pub struct ZenEngine {
     /// on it would silently hand one kernel's pipeline to another. Compiling a shader
     /// goes through hiprtc/naga per call otherwise — orders of magnitude slower than
     /// the kernel itself.
-    pipelines: Mutex<HashMap<&'static str, CachedPipeline>>,
+    pipelines: Mutex<HashMap<String, CachedPipeline>>,
     /// Free-list of device buffers keyed by element count; avoids alloc/free per op.
     pool: Mutex<HashMap<usize, Vec<zengpu::BufferHandle>>>,
 }
@@ -673,9 +898,9 @@ impl ZenEngine {
     fn pipeline_for(
         &self,
         shader: &ZslShader,
-        name: &'static str,
+        name: &str,
         block: [u32; 3],
-    ) -> Result<zengpu::PipelineHandle> {
+    ) -> Result<PipelineHandle> {
         if let Some(cached) = self.pipelines.lock().unwrap().get(name) {
             return Ok(cached.pipeline);
         }
@@ -693,7 +918,7 @@ impl ZenEngine {
             })
             .map_err(|e| err(e.to_string()))?;
         self.pipelines.lock().unwrap().insert(
-            name,
+            name.to_owned(),
             CachedPipeline {
                 shader: sh,
                 pipeline,
@@ -705,10 +930,10 @@ impl ZenEngine {
     /// Compiled raw HIP pipeline, building and caching it under `name` on first use.
     fn pipeline_hip(
         &self,
-        name: &'static str,
+        name: &str,
         src: &'static str,
         block: [u32; 3],
-    ) -> Result<zengpu::PipelineHandle> {
+    ) -> Result<PipelineHandle> {
         if let Some(cached) = self.pipelines.lock().unwrap().get(name) {
             return Ok(cached.pipeline);
         }
@@ -727,13 +952,34 @@ impl ZenEngine {
             })
             .map_err(|e| err(e.to_string()))?;
         self.pipelines.lock().unwrap().insert(
-            name,
+            name.to_owned(),
             CachedPipeline {
                 shader: sh,
                 pipeline,
             },
         );
         Ok(pipeline)
+    }
+
+    /// Select the portable ZSL kernel unless HIP has an override and it has not
+    /// been disabled for parity testing. Raw and portable variants use distinct
+    /// cache keys so an engine can safely compile both.
+    fn kernel_pipeline(
+        &self,
+        name: &'static str,
+        zsl: &ZslShader,
+        raw_hip: Option<&'static str>,
+        block: [u32; 3],
+    ) -> Result<PipelineHandle> {
+        if self.backend == BackendPreference::Hip
+            && raw_hip.is_some()
+            && std::env::var("ZEN_FORCE_ZSL").is_err()
+        {
+            self.pipeline_hip(name, raw_hip.unwrap(), block)
+        } else {
+            let name_zsl = format!("{name}_zsl");
+            self.pipeline_for(zsl, &name_zsl, block)
+        }
     }
 
     fn upload(&self, data: &[f32]) -> zengpu::Result<zengpu::BufferHandle> {
@@ -803,11 +1049,12 @@ impl ZenEngine {
     ) -> Result<DevTensor> {
         let c = self.alloc_dev(m * n)?;
 
-        let pipeline = if self.backend == BackendPreference::Hip {
-            self.pipeline_hip("sgemm_tiled", TILED_SGEMM_HIP, [16, 16, 1])?
-        } else {
-            self.pipeline_for(&SGEMM, "sgemm", [16, 16, 1])?
-        };
+        let pipeline = self.kernel_pipeline(
+            "sgemm_tiled",
+            &TILED_SGEMM_ZSL,
+            Some(TILED_SGEMM_HIP),
+            [16, 16, 1],
+        )?;
 
         let bindings = Bindings {
             buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
@@ -837,11 +1084,12 @@ impl ZenEngine {
     ) -> Result<DevTensor> {
         let c = self.alloc_dev(batch * m * n)?;
 
-        let pipeline = if self.backend == BackendPreference::Hip {
-            self.pipeline_hip("bgemm_tiled", TILED_BGEMM_HIP, [16, 16, 1])?
-        } else {
-            self.pipeline_for(&BGEMM, "bgemm", [16, 16, 1])?
-        };
+        let pipeline = self.kernel_pipeline(
+            "bgemm_tiled",
+            &TILED_BGEMM_ZSL,
+            Some(TILED_BGEMM_HIP),
+            [16, 16, 1],
+        )?;
 
         let bindings = Bindings {
             buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
@@ -875,7 +1123,7 @@ impl ZenEngine {
         }
 
         let c = self.alloc_dev(a.len)?;
-        let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(name, shader, None, [256, 1, 1])?;
         let bindings = Bindings {
             buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
             textures: &[],
@@ -974,7 +1222,12 @@ impl ZenEngine {
             return Err(err("softmax_dev input length mismatch"));
         }
         let y = self.alloc_dev(x.len)?;
-        let pipeline = self.pipeline_hip("softmax_fwd", SOFTMAX_FWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "softmax_fwd",
+            &SOFTMAX_FWD_ZSL,
+            Some(SOFTMAX_FWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), y.buf.index()],
             textures: &[],
@@ -995,7 +1248,12 @@ impl ZenEngine {
             return Err(err("softmax_bwd_dev input length mismatch"));
         }
         let dx = self.alloc_dev(y.len)?;
-        let pipeline = self.pipeline_hip("softmax_bwd", SOFTMAX_BWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "softmax_bwd",
+            &SOFTMAX_BWD_ZSL,
+            Some(SOFTMAX_BWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[y.buf.index(), g.buf.index(), dx.buf.index()],
             textures: &[],
@@ -1010,7 +1268,12 @@ impl ZenEngine {
             return Err(err("gelu_dev input length mismatch"));
         }
         let y = self.alloc_dev(n)?;
-        let pipeline = self.pipeline_hip("gelu_fwd", GELU_FWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "gelu_fwd",
+            &GELU_FWD_ZSL,
+            Some(GELU_FWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), y.buf.index()],
             textures: &[],
@@ -1025,7 +1288,12 @@ impl ZenEngine {
             return Err(err("gelu_bwd_dev input length mismatch"));
         }
         let dx = self.alloc_dev(n)?;
-        let pipeline = self.pipeline_hip("gelu_bwd", GELU_BWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "gelu_bwd",
+            &GELU_BWD_ZSL,
+            Some(GELU_BWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), g.buf.index(), dx.buf.index()],
             textures: &[],
@@ -1050,7 +1318,12 @@ impl ZenEngine {
         let out = self.alloc_dev(x.len)?;
         let xhat = self.alloc_dev(x.len)?;
         let invstd = self.alloc_dev(rows)?;
-        let pipeline = self.pipeline_hip("layernorm_fwd", LAYERNORM_FWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "layernorm_fwd",
+            &LAYERNORM_FWD_ZSL,
+            Some(LAYERNORM_FWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[
                 x.buf.index(),
@@ -1087,14 +1360,24 @@ impl ZenEngine {
         // The backward kernel atomically accumulates these cross-row reductions.
         let dgamma = self.alloc_dev(d)?;
         let dbeta = self.alloc_dev(d)?;
-        let zero_pipeline = self.pipeline_hip("zero_pair", ZERO_PAIR_HIP, [256, 1, 1])?;
+        let zero_pipeline = self.kernel_pipeline(
+            "zero_pair",
+            &ZERO_PAIR_ZSL,
+            Some(ZERO_PAIR_HIP),
+            [256, 1, 1],
+        )?;
         let zero_bindings = Bindings {
             buffers: &[dgamma.buf.index(), dbeta.buf.index()],
             textures: &[],
             scalars: &[Scalar::U32(d as u32)],
         };
         self.dispatch_profiled(zero_pipeline, zero_bindings, [(d as u32 + 255) / 256, 1, 1])?;
-        let pipeline = self.pipeline_hip("layernorm_bwd", LAYERNORM_BWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "layernorm_bwd",
+            &LAYERNORM_BWD_ZSL,
+            Some(LAYERNORM_BWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[
                 g.buf.index(),
@@ -1364,7 +1647,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(name, shader, None, [256, 1, 1])?;
 
         let mut scalars = vec![Scalar::U32(n as u32)];
         scalars.extend_from_slice(extra_scalars);
@@ -1402,7 +1685,7 @@ impl ZenEngine {
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(name, shader, None, [256, 1, 1])?;
 
         let mut scalars = vec![Scalar::U32(n as u32)];
         scalars.extend_from_slice(extra_scalars);
@@ -1465,11 +1748,12 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(m * n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = if self.backend == BackendPreference::Hip {
-            self.pipeline_hip("sgemm_tiled", TILED_SGEMM_HIP, [16, 16, 1])?
-        } else {
-            self.pipeline_for(&SGEMM, "sgemm", [16, 16, 1])?
-        };
+        let pipeline = self.kernel_pipeline(
+            "sgemm_tiled",
+            &TILED_SGEMM_ZSL,
+            Some(TILED_SGEMM_HIP),
+            [16, 16, 1],
+        )?;
 
         let bindings = Bindings {
             buffers: &[ba.index(), bb.index(), bc.index()],
@@ -1512,11 +1796,12 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(batch * m * n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = if self.backend == BackendPreference::Hip {
-            self.pipeline_hip("bgemm_tiled", TILED_BGEMM_HIP, [16, 16, 1])?
-        } else {
-            self.pipeline_for(&BGEMM, "bgemm", [16, 16, 1])?
-        };
+        let pipeline = self.kernel_pipeline(
+            "bgemm_tiled",
+            &TILED_BGEMM_ZSL,
+            Some(TILED_BGEMM_HIP),
+            [16, 16, 1],
+        )?;
 
         let bindings = Bindings {
             buffers: &[ba.index(), bb.index(), bc.index()],
