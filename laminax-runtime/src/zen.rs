@@ -183,6 +183,7 @@ pub struct ZenEngine {
     #[allow(dead_code)]
     instance: Instance,
     backend: BackendPreference,
+    device_name: String,
 }
 
 impl ZenEngine {
@@ -193,17 +194,15 @@ impl ZenEngine {
         if adapters.is_empty() {
             return Err(err("no ZenGPU adapters found"));
         }
+        let device_name = adapters[0].info().name.clone();
         let device: Arc<dyn GpuDevice> =
             Arc::from(adapters[0].open(zengpu::DeviceRequest::default())
                 .map_err(|e| err(format!("open device: {e}")))?);
-        Ok(Self { device, instance, backend })
+        Ok(Self { device, instance, backend, device_name })
     }
 
     pub fn device_name(&self) -> String {
-        self.instance.enumerate_adapters()
-            .first()
-            .map(|a| a.info().name.clone())
-            .unwrap_or_else(|| "unknown".into())
+        self.device_name.clone()
     }
 
     pub fn backend(&self) -> BackendPreference {
