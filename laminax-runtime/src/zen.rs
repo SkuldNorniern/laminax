@@ -102,6 +102,49 @@ const TILED_SGEMM_ZSL: ZslShader = zsl!(
     }
 );
 
+const SGEMM_BIAS_ZSL: ZslShader = zsl!(
+    push P { m: u32, n: u32, k: u32 }
+    @workgroup_size(16, 16)
+    kernel sgemm_bias(
+        a: device buffer<f32>,
+        b: device buffer<f32>,
+        bias: device buffer<f32>,
+        c: device mut buffer<f32>,
+        p: P,
+    ) {
+        shared as_tile: array<f32, 256>
+        shared bs_tile: array<f32, 256>
+        let lx = local_id().x
+        let ly = local_id().y
+        let row = group_id().y * 16 + ly
+        let col = group_id().x * 16 + lx
+        let sum: f32 = 0.0
+        let tile_count = (p.k + 15) / 16
+        for tile in 0..tile_count {
+            let ak = tile * 16 + lx
+            let bk = tile * 16 + ly
+            if row < p.m && ak < p.k {
+                as_tile[ly * 16 + lx] = a[row * p.k + ak]
+            } else {
+                as_tile[ly * 16 + lx] = 0.0
+            }
+            if bk < p.k && col < p.n {
+                bs_tile[ly * 16 + lx] = b[bk * p.n + col]
+            } else {
+                bs_tile[ly * 16 + lx] = 0.0
+            }
+            barrier()
+            for q in 0..16 {
+                sum = sum + as_tile[ly * 16 + q] * bs_tile[q * 16 + lx]
+            }
+            barrier()
+        }
+        if row < p.m && col < p.n {
+            c[row * p.n + col] = sum + bias[col]
+        }
+    }
+);
+
 const TILED_BGEMM_ZSL: ZslShader = zsl!(
     push P { m: u32, n: u32, k: u32 }
     @workgroup_size(16, 16)
@@ -612,6 +655,32 @@ void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
         __syncthreads();
     }
     if (row < M && col < N) C[row * N + col] = acc;
+}
+"#;
+
+const SGEMM_BIAS_HIP: &str = r#"
+#define TILE 16
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
+                const float* __restrict__ bias, float* __restrict__ C,
+                unsigned int M, unsigned int N, unsigned int K) {
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+    unsigned int tx = threadIdx.x, ty = threadIdx.y;
+    unsigned int row = blockIdx.y * TILE + ty;
+    unsigned int col = blockIdx.x * TILE + tx;
+    float acc = 0.0f;
+    unsigned int tiles = (K + TILE - 1) / TILE;
+    for (unsigned int t = 0; t < tiles; ++t) {
+        unsigned int aCol = t * TILE + tx;
+        unsigned int bRow = t * TILE + ty;
+        As[ty][tx] = (row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
+        Bs[ty][tx] = (bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
+        __syncthreads();
+        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        __syncthreads();
+    }
+    if (row < M && col < N) C[row * N + col] = acc + bias[col];
 }
 "#;
 
@@ -1538,6 +1607,44 @@ impl ZenEngine {
             .dispatch(pipeline, bindings, grid)
             .map_err(|e| err(e.to_string()))?;
 
+        Ok(c)
+    }
+
+    pub fn matmul_bias_dev(
+        &self,
+        a: &DevTensor,
+        b: &DevTensor,
+        bias: &DevTensor,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<DevTensor> {
+        if a.dtype != DTypeId::F32 || b.dtype != DTypeId::F32 || bias.dtype != DTypeId::F32 {
+            return Err(err("matmul_bias_dev requires f32 operands"));
+        }
+        if a.len != m * k || b.len != k * n || bias.len != n {
+            return Err(err("matmul_bias_dev input length mismatch"));
+        }
+        let c = self.alloc_dev(m * n)?;
+        let pipeline = self.kernel_pipeline(
+            "sgemm_bias",
+            &SGEMM_BIAS_ZSL,
+            Some(SGEMM_BIAS_HIP),
+            [16, 16, 1],
+        )?;
+        let bindings = Bindings {
+            buffers: &[a.buf.index(), b.buf.index(), bias.buf.index(), c.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
+        };
+        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
+        self.device
+            .dispatch(pipeline, bindings, grid)
+            .map_err(|e| err(e.to_string()))?;
         Ok(c)
     }
 
