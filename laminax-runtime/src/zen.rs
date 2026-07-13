@@ -322,6 +322,264 @@ const LAYERNORM_BWD_ZSL: ZslShader = zsl!(
     }
 );
 
+const COPY_ZSL: ZslShader = zsl!(
+    push P { n: u32 }
+    @workgroup_size(256)
+    kernel copy(x: device buffer<f32>, out: device mut buffer<f32>, p: P, id: global_id) {
+        let i = id.x
+        if i < p.n {
+            out[i] = x[i]
+        }
+    }
+);
+
+const SCALE_ZSL: ZslShader = zsl!(
+    push P { n: u32, scale: f32 }
+    @workgroup_size(256)
+    kernel scale(x: device buffer<f32>, out: device mut buffer<f32>, p: P, id: global_id) {
+        let i = id.x
+        if i < p.n {
+            out[i] = x[i] * p.scale
+        }
+    }
+);
+
+const TRANSPOSE2D_ZSL: ZslShader = zsl!(
+    push P { rows: u32, cols: u32 }
+    @workgroup_size(256)
+    kernel transpose2d(x: device buffer<f32>, out: device mut buffer<f32>, p: P, id: global_id) {
+        let i = id.x
+        if i < p.rows * p.cols {
+            let r = i / p.cols
+            let c = i - r * p.cols
+            out[c * p.rows + r] = x[i]
+        }
+    }
+);
+
+const TRANSPOSE_LAST2_ZSL: ZslShader = zsl!(
+    push P { batch: u32, rows: u32, cols: u32 }
+    @workgroup_size(256)
+    kernel transpose_last2(x: device buffer<f32>, out: device mut buffer<f32>, p: P, id: global_id) {
+        let i = id.x
+        let plane = p.rows * p.cols
+        if i < p.batch * plane {
+            let b = i / plane
+            let q = i - b * plane
+            let r = q / p.cols
+            let c = q - r * p.cols
+            out[b * plane + c * p.rows + r] = x[i]
+        }
+    }
+);
+
+const CE_FWD_ZSL: ZslShader = zsl!(
+    push P { n: u32, v: u32 }
+    @workgroup_size(256)
+    kernel ce_fwd(
+        logits: device buffer<f32>,
+        tgt: device buffer<f32>,
+        probs: device mut buffer<f32>,
+        rowloss: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let r = id.x
+        if r < p.n {
+            let base = r * p.v
+            let m: f32 = -3.402823e38
+            for j in 0..p.v {
+                m = max(m, logits[base + j])
+            }
+            let sum: f32 = 0.0
+            for j in 0..p.v {
+                let e = exp(logits[base + j] - m)
+                probs[base + j] = e
+                sum = sum + e
+            }
+            let inv = 1.0 / sum
+            for j in 0..p.v {
+                probs[base + j] = probs[base + j] * inv
+            }
+            let t = u32(tgt[r])
+            rowloss[r] = -log(probs[base + t] + 1e-12)
+        }
+    }
+);
+
+const CE_BWD_ZSL: ZslShader = zsl!(
+    push P { n: u32, v: u32, scale: f32 }
+    @workgroup_size(256)
+    kernel ce_bwd(
+        probs: device buffer<f32>,
+        tgt: device buffer<f32>,
+        dlogits: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let r = id.x
+        if r < p.n {
+            let base = r * p.v
+            let t = u32(tgt[r])
+            for j in 0..p.v {
+                let expected: f32 = 0.0
+                if j == t {
+                    expected = 1.0
+                }
+                dlogits[base + j] = (probs[base + j] - expected) * p.scale
+            }
+        }
+    }
+);
+
+const EMB_GATHER_ZSL: ZslShader = zsl!(
+    push P { n: u32, c: u32 }
+    @workgroup_size(256)
+    kernel emb_gather(
+        weight: device buffer<f32>,
+        idx: device buffer<f32>,
+        out: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n * p.c {
+            let r = i / p.c
+            let col = i - r * p.c
+            let row = u32(idx[r])
+            out[i] = weight[row * p.c + col]
+        }
+    }
+);
+
+const EMB_SCATTER_ZSL: ZslShader = zsl!(
+    push P { n: u32, c: u32 }
+    @workgroup_size(256)
+    kernel emb_scatter(
+        g: device buffer<f32>,
+        idx: device buffer<f32>,
+        dw: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n * p.c {
+            let r = i / p.c
+            let col = i - r * p.c
+            let row = u32(idx[r])
+            atomic_add(dw, row * p.c + col, g[i])
+        }
+    }
+);
+
+const BIAS_ADD_ZSL: ZslShader = zsl!(
+    push P { n: u32, c: u32 }
+    @workgroup_size(256)
+    kernel bias_add(
+        x: device buffer<f32>,
+        bias: device buffer<f32>,
+        out: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n {
+            let col = i - (i / p.c) * p.c
+            out[i] = x[i] + bias[col]
+        }
+    }
+);
+
+const BIAS_ROWSUM_ZSL: ZslShader = zsl!(
+    push P { rows: u32, c: u32 }
+    @workgroup_size(256)
+    kernel bias_rowsum(
+        g: device buffer<f32>,
+        dbias: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let col = id.x
+        if col < p.c {
+            let sum: f32 = 0.0
+            for r in 0..p.rows {
+                sum = sum + g[r * p.c + col]
+            }
+            dbias[col] = sum
+        }
+    }
+);
+
+const SLICE_COLS_ZSL: ZslShader = zsl!(
+    push P { rows: u32, cols: u32, len: u32, start: u32 }
+    @workgroup_size(256)
+    kernel slice_cols(x: device buffer<f32>, out: device mut buffer<f32>, p: P, id: global_id) {
+        let i = id.x
+        if i < p.rows * p.len {
+            let r = i / p.len
+            let l = i - r * p.len
+            out[i] = x[r * p.cols + p.start + l]
+        }
+    }
+);
+
+const SLICE_COLS_BWD_ZSL: ZslShader = zsl!(
+    push P { rows: u32, cols: u32, len: u32, start: u32 }
+    @workgroup_size(256)
+    kernel slice_cols_bwd(
+        g: device buffer<f32>,
+        dx: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.rows * p.len {
+            let r = i / p.len
+            let l = i - r * p.len
+            dx[r * p.cols + p.start + l] = g[i]
+        }
+    }
+);
+
+const ZERO_ZSL: ZslShader = zsl!(
+    push P { n: u32 }
+    @workgroup_size(256)
+    kernel zero(out: device mut buffer<f32>, p: P, id: global_id) {
+        let i = id.x
+        if i < p.n {
+            out[i] = 0.0
+        }
+    }
+);
+
+const ADAM_STEP_ZSL: ZslShader = zsl!(
+    push P { lr: f32, b1: f32, b2: f32, eps: f32, wd: f32, bc1: f32, bc2: f32, n: u32 }
+    @workgroup_size(256)
+    kernel adam_step(
+        w: device mut buffer<f32>,
+        g: device buffer<f32>,
+        m: device mut buffer<f32>,
+        v: device mut buffer<f32>,
+        p: P,
+        id: global_id,
+    ) {
+        let i = id.x
+        if i < p.n {
+            let gi = g[i]
+            let mi = p.b1 * m[i] + (1.0 - p.b1) * gi
+            let vi = p.b2 * v[i] + (1.0 - p.b2) * gi * gi
+            m[i] = mi
+            v[i] = vi
+            let wi = w[i]
+            if p.wd != 0.0 {
+                wi = wi - p.lr * p.wd * wi
+            }
+            wi = wi - p.lr * (mi / p.bc1) / (sqrt(vi / p.bc2) + p.eps)
+            w[i] = wi
+        }
+    }
+);
+
 const TILED_SGEMM_HIP: &str = r#"
 #define TILE 16
 extern "C" __global__ __launch_bounds__(256)
@@ -1155,7 +1413,7 @@ impl ZenEngine {
 
     pub fn copy_dev(&self, x: &DevTensor) -> Result<DevTensor> {
         let out = self.alloc_dev(x.len)?;
-        let pipeline = self.pipeline_hip("copy", COPY_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline("copy", &COPY_ZSL, Some(COPY_HIP), [256, 1, 1])?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), out.buf.index()],
             textures: &[],
@@ -1167,7 +1425,7 @@ impl ZenEngine {
 
     pub fn scale_dev(&self, x: &DevTensor, scale: f32) -> Result<DevTensor> {
         let out = self.alloc_dev(x.len)?;
-        let pipeline = self.pipeline_hip("scale", SCALE_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline("scale", &SCALE_ZSL, Some(SCALE_HIP), [256, 1, 1])?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), out.buf.index()],
             textures: &[],
@@ -1182,7 +1440,12 @@ impl ZenEngine {
             return Err(err("transpose2d_dev input length mismatch"));
         }
         let out = self.alloc_dev(x.len)?;
-        let pipeline = self.pipeline_hip("transpose2d", TRANSPOSE2D_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "transpose2d",
+            &TRANSPOSE2D_ZSL,
+            Some(TRANSPOSE2D_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), out.buf.index()],
             textures: &[],
@@ -1203,7 +1466,12 @@ impl ZenEngine {
             return Err(err("transpose_last2_dev input length mismatch"));
         }
         let out = self.alloc_dev(x.len)?;
-        let pipeline = self.pipeline_hip("transpose_last2", TRANSPOSE_LAST2_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "transpose_last2",
+            &TRANSPOSE_LAST2_ZSL,
+            Some(TRANSPOSE_LAST2_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), out.buf.index()],
             textures: &[],
@@ -1396,7 +1664,7 @@ impl ZenEngine {
     }
 
     fn zero_dev(&self, out: &DevTensor) -> Result<()> {
-        let pipeline = self.pipeline_hip("zero", ZERO_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline("zero", &ZERO_ZSL, Some(ZERO_HIP), [256, 1, 1])?;
         let bindings = Bindings {
             buffers: &[out.buf.index()],
             textures: &[],
@@ -1433,7 +1701,12 @@ impl ZenEngine {
         if w.len != n || g.len != n || m.len != n || v.len != n {
             return Err(err("adam_step_dev input length mismatch"));
         }
-        let pipeline = self.pipeline_hip("adam_step", ADAM_STEP_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "adam_step",
+            &ADAM_STEP_ZSL,
+            Some(ADAM_STEP_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[w.buf.index(), g.buf.index(), m.buf.index(), v.buf.index()],
             textures: &[],
@@ -1463,7 +1736,8 @@ impl ZenEngine {
         }
         let probs = self.alloc_dev(logits.len)?;
         let rowloss = self.alloc_dev(n)?;
-        let pipeline = self.pipeline_hip("ce_fwd", CE_FWD_HIP, [256, 1, 1])?;
+        let pipeline =
+            self.kernel_pipeline("ce_fwd", &CE_FWD_ZSL, Some(CE_FWD_HIP), [256, 1, 1])?;
         let bindings = Bindings {
             buffers: &[
                 logits.buf.index(),
@@ -1490,7 +1764,8 @@ impl ZenEngine {
             return Err(err("cross_entropy_bwd_dev input length mismatch"));
         }
         let dlogits = self.alloc_dev(probs.len)?;
-        let pipeline = self.pipeline_hip("ce_bwd", CE_BWD_HIP, [256, 1, 1])?;
+        let pipeline =
+            self.kernel_pipeline("ce_bwd", &CE_BWD_ZSL, Some(CE_BWD_HIP), [256, 1, 1])?;
         let bindings = Bindings {
             buffers: &[probs.buf.index(), targets.buf.index(), dlogits.buf.index()],
             textures: &[],
@@ -1516,7 +1791,12 @@ impl ZenEngine {
             return Err(err("embedding_dev input length mismatch"));
         }
         let out = self.alloc_dev(n * c)?;
-        let pipeline = self.pipeline_hip("emb_gather", EMB_GATHER_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "emb_gather",
+            &EMB_GATHER_ZSL,
+            Some(EMB_GATHER_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[weight.buf.index(), idx.buf.index(), out.buf.index()],
             textures: &[],
@@ -1539,7 +1819,12 @@ impl ZenEngine {
         }
         let dw = self.alloc_dev(vocab * c)?;
         self.zero_dev(&dw)?;
-        let pipeline = self.pipeline_hip("emb_scatter", EMB_SCATTER_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "emb_scatter",
+            &EMB_SCATTER_ZSL,
+            Some(EMB_SCATTER_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[g.buf.index(), idx.buf.index(), dw.buf.index()],
             textures: &[],
@@ -1554,7 +1839,12 @@ impl ZenEngine {
             return Err(err("bias_add_dev input length mismatch"));
         }
         let out = self.alloc_dev(x.len)?;
-        let pipeline = self.pipeline_hip("bias_add", BIAS_ADD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "bias_add",
+            &BIAS_ADD_ZSL,
+            Some(BIAS_ADD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), bias.buf.index(), out.buf.index()],
             textures: &[],
@@ -1569,7 +1859,12 @@ impl ZenEngine {
             return Err(err("bias_rowsum_dev input length mismatch"));
         }
         let dbias = self.alloc_dev(c)?;
-        let pipeline = self.pipeline_hip("bias_rowsum", BIAS_ROWSUM_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "bias_rowsum",
+            &BIAS_ROWSUM_ZSL,
+            Some(BIAS_ROWSUM_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[g.buf.index(), dbias.buf.index()],
             textures: &[],
@@ -1591,7 +1886,12 @@ impl ZenEngine {
             return Err(err("slice_cols_dev input length mismatch"));
         }
         let out = self.alloc_dev(r * len)?;
-        let pipeline = self.pipeline_hip("slice_cols", SLICE_COLS_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "slice_cols",
+            &SLICE_COLS_ZSL,
+            Some(SLICE_COLS_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[x.buf.index(), out.buf.index()],
             textures: &[],
@@ -1619,7 +1919,12 @@ impl ZenEngine {
         }
         let dx = self.alloc_dev(r * c)?;
         self.zero_dev(&dx)?;
-        let pipeline = self.pipeline_hip("slice_cols_bwd", SLICE_COLS_BWD_HIP, [256, 1, 1])?;
+        let pipeline = self.kernel_pipeline(
+            "slice_cols_bwd",
+            &SLICE_COLS_BWD_ZSL,
+            Some(SLICE_COLS_BWD_HIP),
+            [256, 1, 1],
+        )?;
         let bindings = Bindings {
             buffers: &[g.buf.index(), dx.buf.index()],
             textures: &[],
