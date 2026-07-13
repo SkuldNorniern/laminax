@@ -714,6 +714,45 @@ void zsl_kernel(const unsigned short* __restrict__ A,
 }
 "#;
 
+const TILED_BGEMM_BF16_HIP: &str = r#"
+#define TILE 16
+__device__ __forceinline__ float bf16_to_f32(unsigned short x) {
+    return __uint_as_float(((unsigned int)x) << 16);
+}
+__device__ __forceinline__ unsigned short f32_to_bf16(float x) {
+    unsigned int bits = __float_as_uint(x);
+    unsigned int bias = 0x7fffu + ((bits >> 16) & 1u);
+    return (unsigned short)((bits + bias) >> 16);
+}
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const unsigned short* __restrict__ A,
+                const unsigned short* __restrict__ B,
+                unsigned short* __restrict__ C,
+                unsigned int M, unsigned int N, unsigned int K) {
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+    unsigned int tx = threadIdx.x, ty = threadIdx.y;
+    unsigned int row = blockIdx.y * TILE + ty;
+    unsigned int col = blockIdx.x * TILE + tx;
+    unsigned int batch = blockIdx.z;
+    const unsigned short* Ab = A + (size_t)batch * M * K;
+    const unsigned short* Bb = B + (size_t)batch * K * N;
+    float acc = 0.0f;
+    unsigned int tiles = (K + TILE - 1) / TILE;
+    for (unsigned int t = 0; t < tiles; ++t) {
+        unsigned int aCol = t * TILE + tx;
+        unsigned int bRow = t * TILE + ty;
+        As[ty][tx] = (row < M && aCol < K) ? bf16_to_f32(Ab[row * K + aCol]) : 0.0f;
+        Bs[ty][tx] = (bRow < K && col < N) ? bf16_to_f32(Bb[bRow * N + col]) : 0.0f;
+        __syncthreads();
+        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        __syncthreads();
+    }
+    if (row < M && col < N)
+        C[(size_t)batch * M * N + row * N + col] = f32_to_bf16(acc);
+}
+"#;
+
 const COPY_HIP: &str = r#"
 extern "C" __global__ __launch_bounds__(256)
 void zsl_kernel(const float* __restrict__ x, float* __restrict__ out, unsigned int N) {
@@ -1582,6 +1621,55 @@ impl ZenEngine {
             .dispatch(pipeline, bindings, grid)
             .map_err(|e| err(e.to_string()))?;
 
+        Ok(c)
+    }
+
+    /// HIP-only batched bf16 GEMM. Inputs and output are bf16; tile loads and
+    /// accumulation are f32.
+    pub fn matmul_batched_bf16_dev(
+        &self,
+        a: &DevTensor,
+        b: &DevTensor,
+        batch: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<DevTensor> {
+        if a.dtype != DTypeId::BF16 || b.dtype != DTypeId::BF16 {
+            return Err(err("matmul_batched_bf16_dev requires bf16 operands"));
+        }
+        if self.backend != BackendPreference::Hip {
+            return Err(err("bf16 device batched GEMM currently requires the HIP backend"));
+        }
+        if a.len != batch * m * k || b.len != batch * k * n {
+            return Err(err(format!(
+                "bf16 batched GEMM shape mismatch: A={}, B={}, expected {} and {}",
+                a.len,
+                b.len,
+                batch * m * k,
+                batch * k * n
+            )));
+        }
+        let c = self.alloc_dev_dtype(batch * m * n, DTypeId::BF16)?;
+        let pipeline = self.pipeline_hip(
+            "bgemm_bf16_tiled",
+            TILED_BGEMM_BF16_HIP,
+            [16, 16, 1],
+        )?;
+        let bindings = Bindings {
+            buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
+        };
+        self.dispatch_profiled(
+            pipeline,
+            bindings,
+            [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32],
+        )?;
         Ok(c)
     }
 
