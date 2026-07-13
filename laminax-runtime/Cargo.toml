@@ -4,12 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-gpu = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip", "zengpu/vulkan", "zengpu/cuda"]
+# HIP (ROCm) + Vulkan backends. CUDA is intentionally omitted: zengpu-cuda emits
+# `-lnvrtc -lcuda` link flags that break binaries on non-NVIDIA hosts. Re-add
+# `zengpu/cuda` only where the CUDA toolkit is present.
+gpu = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip", "zengpu/vulkan"]
+# CPU AOT JIT path (aot.rs): lowers LCIR → Lamina IR → MIR → native code via lamina.
+# Kept optional because it pulls the `lamina` toolchain (and `lamina-ras`); the GPU
+# ZenEngine path does not need it.
+aot = ["dep:lamina", "dep:laminax-codegen"]
 
 [dependencies]
 laminax-types = { path = "../laminax-types" }
 laminax-lcir = { path = "../laminax-lcir" }
-laminax-codegen = { path = "../laminax-codegen" }
-lamina = { path = "../../lamina", features = ["encoder"] }
+laminax-codegen = { path = "../laminax-codegen", optional = true }
+lamina = { path = "../../lamina", features = ["encoder"], optional = true }
 zengpu        = { path = "/mnt/data2/Repository/ZenGPU", optional = true }
 zengpu-spirv  = { path = "/mnt/data2/Repository/ZenGPU/zengpu-spirv", optional = true }
