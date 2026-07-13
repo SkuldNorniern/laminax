@@ -634,81 +634,203 @@ const ADAM_STEP_ZSL: ZslShader = zsl!(
 );
 
 const TILED_SGEMM_HIP: &str = r#"
-#define TILE 16
+#define BM 64
+#define BN 64
+#define BK 16
+#define TM 4
+#define TN 4
 extern "C" __global__ __launch_bounds__(256)
 void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
                 float* __restrict__ C, unsigned int M, unsigned int N, unsigned int K) {
-    __shared__ float As[TILE][TILE];
-    __shared__ float Bs[TILE][TILE];
+    __shared__ float As[BM][BK];
+    __shared__ float Bs[BK][BN];
     unsigned int tx = threadIdx.x, ty = threadIdx.y;
-    unsigned int row = blockIdx.y * TILE + ty;
-    unsigned int col = blockIdx.x * TILE + tx;
-    float acc = 0.0f;
-    unsigned int tiles = (K + TILE - 1) / TILE;
-    for (unsigned int t = 0; t < tiles; ++t) {
-        unsigned int aCol = t * TILE + tx;
-        unsigned int bRow = t * TILE + ty;
-        As[ty][tx] = (row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
-        Bs[ty][tx] = (bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
+    unsigned int tid = ty * 16 + tx;
+    unsigned int blockRow = blockIdx.y * BM;
+    unsigned int blockCol = blockIdx.x * BN;
+    float acc[TM][TN] = {{0.0f}};
+    for (unsigned int tileK = 0; tileK < K; tileK += BK) {
+        #pragma unroll
+        for (unsigned int load = 0; load < (BM * BK) / 256; ++load) {
+            unsigned int i = tid + load * 256;
+            unsigned int row = i / BK;
+            unsigned int col = i % BK;
+            unsigned int globalRow = blockRow + row;
+            unsigned int globalCol = tileK + col;
+            As[row][col] = (globalRow < M && globalCol < K)
+                ? A[(size_t)globalRow * K + globalCol] : 0.0f;
+        }
+        #pragma unroll
+        for (unsigned int load = 0; load < (BK * BN) / 256; ++load) {
+            unsigned int i = tid + load * 256;
+            unsigned int row = i / BN;
+            unsigned int col = i % BN;
+            unsigned int globalRow = tileK + row;
+            unsigned int globalCol = blockCol + col;
+            Bs[row][col] = (globalRow < K && globalCol < N)
+                ? B[(size_t)globalRow * N + globalCol] : 0.0f;
+        }
         __syncthreads();
-        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        #pragma unroll
+        for (unsigned int q = 0; q < BK; ++q) {
+            float ar[TM], br[TN];
+            #pragma unroll
+            for (unsigned int i = 0; i < TM; ++i) ar[i] = As[ty + i * 16][q];
+            #pragma unroll
+            for (unsigned int j = 0; j < TN; ++j) br[j] = Bs[q][tx + j * 16];
+            #pragma unroll
+            for (unsigned int i = 0; i < TM; ++i) {
+                #pragma unroll
+                for (unsigned int j = 0; j < TN; ++j) acc[i][j] += ar[i] * br[j];
+            }
+        }
         __syncthreads();
     }
-    if (row < M && col < N) C[row * N + col] = acc;
+    #pragma unroll
+    for (unsigned int i = 0; i < TM; ++i) {
+        unsigned int row = blockRow + ty + i * 16;
+        #pragma unroll
+        for (unsigned int j = 0; j < TN; ++j) {
+            unsigned int col = blockCol + tx + j * 16;
+            if (row < M && col < N) C[(size_t)row * N + col] = acc[i][j];
+        }
+    }
 }
 "#;
 
 const SGEMM_BIAS_HIP: &str = r#"
-#define TILE 16
+#define BM 64
+#define BN 64
+#define BK 16
+#define TM 4
+#define TN 4
 extern "C" __global__ __launch_bounds__(256)
 void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
                 const float* __restrict__ bias, float* __restrict__ C,
                 unsigned int M, unsigned int N, unsigned int K) {
-    __shared__ float As[TILE][TILE];
-    __shared__ float Bs[TILE][TILE];
+    __shared__ float As[BM][BK];
+    __shared__ float Bs[BK][BN];
     unsigned int tx = threadIdx.x, ty = threadIdx.y;
-    unsigned int row = blockIdx.y * TILE + ty;
-    unsigned int col = blockIdx.x * TILE + tx;
-    float acc = 0.0f;
-    unsigned int tiles = (K + TILE - 1) / TILE;
-    for (unsigned int t = 0; t < tiles; ++t) {
-        unsigned int aCol = t * TILE + tx;
-        unsigned int bRow = t * TILE + ty;
-        As[ty][tx] = (row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
-        Bs[ty][tx] = (bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
+    unsigned int tid = ty * 16 + tx;
+    unsigned int blockRow = blockIdx.y * BM;
+    unsigned int blockCol = blockIdx.x * BN;
+    float acc[TM][TN] = {{0.0f}};
+    for (unsigned int tileK = 0; tileK < K; tileK += BK) {
+        #pragma unroll
+        for (unsigned int load = 0; load < (BM * BK) / 256; ++load) {
+            unsigned int i = tid + load * 256;
+            unsigned int row = i / BK;
+            unsigned int col = i % BK;
+            unsigned int globalRow = blockRow + row;
+            unsigned int globalCol = tileK + col;
+            As[row][col] = (globalRow < M && globalCol < K)
+                ? A[(size_t)globalRow * K + globalCol] : 0.0f;
+        }
+        #pragma unroll
+        for (unsigned int load = 0; load < (BK * BN) / 256; ++load) {
+            unsigned int i = tid + load * 256;
+            unsigned int row = i / BN;
+            unsigned int col = i % BN;
+            unsigned int globalRow = tileK + row;
+            unsigned int globalCol = blockCol + col;
+            Bs[row][col] = (globalRow < K && globalCol < N)
+                ? B[(size_t)globalRow * N + globalCol] : 0.0f;
+        }
         __syncthreads();
-        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        #pragma unroll
+        for (unsigned int q = 0; q < BK; ++q) {
+            float ar[TM], br[TN];
+            #pragma unroll
+            for (unsigned int i = 0; i < TM; ++i) ar[i] = As[ty + i * 16][q];
+            #pragma unroll
+            for (unsigned int j = 0; j < TN; ++j) br[j] = Bs[q][tx + j * 16];
+            #pragma unroll
+            for (unsigned int i = 0; i < TM; ++i) {
+                #pragma unroll
+                for (unsigned int j = 0; j < TN; ++j) acc[i][j] += ar[i] * br[j];
+            }
+        }
         __syncthreads();
     }
-    if (row < M && col < N) C[row * N + col] = acc + bias[col];
+    #pragma unroll
+    for (unsigned int i = 0; i < TM; ++i) {
+        unsigned int row = blockRow + ty + i * 16;
+        #pragma unroll
+        for (unsigned int j = 0; j < TN; ++j) {
+            unsigned int col = blockCol + tx + j * 16;
+            if (row < M && col < N)
+                C[(size_t)row * N + col] = acc[i][j] + bias[col];
+        }
+    }
 }
 "#;
 
 const TILED_BGEMM_HIP: &str = r#"
-#define TILE 16
+#define BM 64
+#define BN 64
+#define BK 16
+#define TM 4
+#define TN 4
 extern "C" __global__ __launch_bounds__(256)
 void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
                 float* __restrict__ C, unsigned int M, unsigned int N, unsigned int K) {
-    __shared__ float As[TILE][TILE];
-    __shared__ float Bs[TILE][TILE];
+    __shared__ float As[BM][BK];
+    __shared__ float Bs[BK][BN];
     unsigned int tx = threadIdx.x, ty = threadIdx.y;
-    unsigned int row = blockIdx.y * TILE + ty;
-    unsigned int col = blockIdx.x * TILE + tx;
+    unsigned int tid = ty * 16 + tx;
+    unsigned int blockRow = blockIdx.y * BM;
+    unsigned int blockCol = blockIdx.x * BN;
     unsigned int batch = blockIdx.z;
     const float* Ab = A + (size_t)batch * M * K;
     const float* Bb = B + (size_t)batch * K * N;
-    float acc = 0.0f;
-    unsigned int tiles = (K + TILE - 1) / TILE;
-    for (unsigned int t = 0; t < tiles; ++t) {
-        unsigned int aCol = t * TILE + tx;
-        unsigned int bRow = t * TILE + ty;
-        As[ty][tx] = (row < M && aCol < K) ? Ab[row * K + aCol] : 0.0f;
-        Bs[ty][tx] = (bRow < K && col < N) ? Bb[bRow * N + col] : 0.0f;
+    float acc[TM][TN] = {{0.0f}};
+    for (unsigned int tileK = 0; tileK < K; tileK += BK) {
+        #pragma unroll
+        for (unsigned int load = 0; load < (BM * BK) / 256; ++load) {
+            unsigned int i = tid + load * 256;
+            unsigned int row = i / BK;
+            unsigned int col = i % BK;
+            unsigned int globalRow = blockRow + row;
+            unsigned int globalCol = tileK + col;
+            As[row][col] = (globalRow < M && globalCol < K)
+                ? Ab[(size_t)globalRow * K + globalCol] : 0.0f;
+        }
+        #pragma unroll
+        for (unsigned int load = 0; load < (BK * BN) / 256; ++load) {
+            unsigned int i = tid + load * 256;
+            unsigned int row = i / BN;
+            unsigned int col = i % BN;
+            unsigned int globalRow = tileK + row;
+            unsigned int globalCol = blockCol + col;
+            Bs[row][col] = (globalRow < K && globalCol < N)
+                ? Bb[(size_t)globalRow * N + globalCol] : 0.0f;
+        }
         __syncthreads();
-        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        #pragma unroll
+        for (unsigned int q = 0; q < BK; ++q) {
+            float ar[TM], br[TN];
+            #pragma unroll
+            for (unsigned int i = 0; i < TM; ++i) ar[i] = As[ty + i * 16][q];
+            #pragma unroll
+            for (unsigned int j = 0; j < TN; ++j) br[j] = Bs[q][tx + j * 16];
+            #pragma unroll
+            for (unsigned int i = 0; i < TM; ++i) {
+                #pragma unroll
+                for (unsigned int j = 0; j < TN; ++j) acc[i][j] += ar[i] * br[j];
+            }
+        }
         __syncthreads();
     }
-    if (row < M && col < N) C[(size_t)batch * M * N + row * N + col] = acc;
+    float* Cb = C + (size_t)batch * M * N;
+    #pragma unroll
+    for (unsigned int i = 0; i < TM; ++i) {
+        unsigned int row = blockRow + ty + i * 16;
+        #pragma unroll
+        for (unsigned int j = 0; j < TN; ++j) {
+            unsigned int col = blockCol + tx + j * 16;
+            if (row < M && col < N) Cb[(size_t)row * N + col] = acc[i][j];
+        }
+    }
 }
 "#;
 
@@ -1424,15 +1546,16 @@ impl ZenEngine {
         raw_hip: Option<&'static str>,
         block: [u32; 3],
     ) -> Result<PipelineHandle> {
-        if self.backend == BackendPreference::Hip
-            && raw_hip.is_some()
-            && std::env::var("ZEN_FORCE_ZSL").is_err()
-        {
+        if self.raw_hip_enabled() && raw_hip.is_some() {
             self.pipeline_hip(name, raw_hip.unwrap(), block)
         } else {
             let name_zsl = format!("{name}_zsl");
             self.pipeline_for(zsl, &name_zsl, block)
         }
+    }
+
+    fn raw_hip_enabled(&self) -> bool {
+        self.backend == BackendPreference::Hip && std::env::var("ZEN_FORCE_ZSL").is_err()
     }
 
     fn upload(&self, data: &[f32]) -> zengpu::Result<zengpu::BufferHandle> {
@@ -1602,7 +1725,8 @@ impl ZenEngine {
                 Scalar::U32(k as u32),
             ],
         };
-        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
+        let tile = if self.raw_hip_enabled() { 64 } else { 16 };
+        let grid = [(n as u32 + tile - 1) / tile, (m as u32 + tile - 1) / tile, 1];
         self.device
             .dispatch(pipeline, bindings, grid)
             .map_err(|e| err(e.to_string()))?;
@@ -1641,7 +1765,8 @@ impl ZenEngine {
                 Scalar::U32(k as u32),
             ],
         };
-        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
+        let tile = if self.raw_hip_enabled() { 64 } else { 16 };
+        let grid = [(n as u32 + tile - 1) / tile, (m as u32 + tile - 1) / tile, 1];
         self.device
             .dispatch(pipeline, bindings, grid)
             .map_err(|e| err(e.to_string()))?;
@@ -1723,7 +1848,12 @@ impl ZenEngine {
                 Scalar::U32(k as u32),
             ],
         };
-        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
+        let tile = if self.raw_hip_enabled() { 64 } else { 16 };
+        let grid = [
+            (n as u32 + tile - 1) / tile,
+            (m as u32 + tile - 1) / tile,
+            batch as u32,
+        ];
         self.device
             .dispatch(pipeline, bindings, grid)
             .map_err(|e| err(e.to_string()))?;
@@ -2483,7 +2613,8 @@ impl ZenEngine {
                 Scalar::U32(k as u32),
             ],
         };
-        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
+        let tile = if self.raw_hip_enabled() { 64 } else { 16 };
+        let grid = [(n as u32 + tile - 1) / tile, (m as u32 + tile - 1) / tile, 1];
         let start = prof().then(Instant::now);
         let result = self.device.dispatch(pipeline, bindings, grid);
         if let Some(start) = start {
@@ -2531,7 +2662,12 @@ impl ZenEngine {
                 Scalar::U32(k as u32),
             ],
         };
-        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
+        let tile = if self.raw_hip_enabled() { 64 } else { 16 };
+        let grid = [
+            (n as u32 + tile - 1) / tile,
+            (m as u32 + tile - 1) / tile,
+            batch as u32,
+        ];
         let start = prof().then(Instant::now);
         let result = self.device.dispatch(pipeline, bindings, grid);
         if let Some(start) = start {
