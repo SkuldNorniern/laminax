@@ -285,6 +285,104 @@ void zsl_kernel(const float* __restrict__ g, const float* __restrict__ xhat,
 }
 "#;
 
+const CE_FWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ logits, const float* __restrict__ tgt,
+                float* __restrict__ probs, float* __restrict__ rowloss,
+                unsigned int N, unsigned int V) {
+  unsigned int r=blockIdx.x*blockDim.x+threadIdx.x; if(r>=N)return;
+  const float* x=logits+(size_t)r*V; float* p=probs+(size_t)r*V;
+  float m=-3.402823e38f;
+  for(unsigned int j=0;j<V;++j)m=fmaxf(m,x[j]);
+  float sum=0.f;
+  for(unsigned int j=0;j<V;++j){float e=__expf(x[j]-m);p[j]=e;sum+=e;}
+  float inv=1.f/sum;
+  for(unsigned int j=0;j<V;++j)p[j]*=inv;
+  unsigned int t=(unsigned int)tgt[r];
+  rowloss[r]=-logf(p[t]+1e-12f);
+}
+"#;
+
+const CE_BWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ probs, const float* __restrict__ tgt,
+                float* __restrict__ dlogits, unsigned int N, unsigned int V,
+                float scale) {
+  unsigned int r=blockIdx.x*blockDim.x+threadIdx.x; if(r>=N)return;
+  unsigned int t=(unsigned int)tgt[r];
+  const float* p=probs+(size_t)r*V; float* d=dlogits+(size_t)r*V;
+  for(unsigned int j=0;j<V;++j)d[j]=(p[j]-(j==t?1.f:0.f))*scale;
+}
+"#;
+
+const EMB_GATHER_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ weight, const float* __restrict__ idx,
+                float* __restrict__ out, unsigned int N, unsigned int C) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x;
+  unsigned int total=N*C; if(i>=total)return;
+  unsigned int r=i/C, c=i-r*C, row=(unsigned int)idx[r];
+  out[i]=weight[(size_t)row*C+c];
+}
+"#;
+
+const EMB_SCATTER_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ g, const float* __restrict__ idx,
+                float* __restrict__ dw, unsigned int N, unsigned int C) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x;
+  unsigned int total=N*C; if(i>=total)return;
+  unsigned int r=i/C, c=i-r*C, row=(unsigned int)idx[r];
+  atomicAdd(&dw[(size_t)row*C+c],g[i]);
+}
+"#;
+
+const BIAS_ADD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, const float* __restrict__ bias,
+                float* __restrict__ out, unsigned int N, unsigned int C) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x;
+  if(i<N)out[i]=x[i]+bias[i%C];
+}
+"#;
+
+const BIAS_ROWSUM_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ g, float* __restrict__ dbias,
+                unsigned int rows, unsigned int C) {
+  unsigned int c=blockIdx.x*blockDim.x+threadIdx.x; if(c>=C)return;
+  float sum=0.f; for(unsigned int r=0;r<rows;++r)sum+=g[(size_t)r*C+c];
+  dbias[c]=sum;
+}
+"#;
+
+const SLICE_COLS_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ out,
+                unsigned int R, unsigned int C, unsigned int L, unsigned int start) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x;
+  unsigned int total=R*L; if(i>=total)return;
+  unsigned int r=i/L, l=i-r*L; out[i]=x[(size_t)r*C+start+l];
+}
+"#;
+
+const SLICE_COLS_BWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ g, float* __restrict__ dx,
+                unsigned int R, unsigned int C, unsigned int L, unsigned int start) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x;
+  unsigned int total=R*L; if(i>=total)return;
+  unsigned int r=i/L, l=i-r*L; dx[(size_t)r*C+start+l]=g[i];
+}
+"#;
+
+const ZERO_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(float* __restrict__ out, unsigned int N) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x; if(i<N)out[i]=0.f;
+}
+"#;
+
 const ADD: ZslShader = zsl!(
     push P { n: u32 }
     @workgroup_size(256)
@@ -926,6 +1024,199 @@ impl ZenEngine {
         };
         self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
         Ok((dx, dgamma, dbeta))
+    }
+
+    fn zero_dev(&self, out: &DevTensor) -> Result<()> {
+        let pipeline = self.pipeline_hip("zero", ZERO_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[out.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(out.len as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(out.len as u32 + 255) / 256, 1, 1])
+    }
+
+    pub fn cross_entropy_dev(
+        &self,
+        logits: &DevTensor,
+        targets: &DevTensor,
+        n: usize,
+        v: usize,
+    ) -> Result<(DevTensor, DevTensor)> {
+        if logits.len != n * v || targets.len != n {
+            return Err(err("cross_entropy_dev input length mismatch"));
+        }
+        let probs = self.alloc_dev(logits.len)?;
+        let rowloss = self.alloc_dev(n)?;
+        let pipeline = self.pipeline_hip("ce_fwd", CE_FWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[
+                logits.buf.index(),
+                targets.buf.index(),
+                probs.buf.index(),
+                rowloss.buf.index(),
+            ],
+            textures: &[],
+            scalars: &[Scalar::U32(n as u32), Scalar::U32(v as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(n as u32 + 255) / 256, 1, 1])?;
+        Ok((probs, rowloss))
+    }
+
+    pub fn cross_entropy_bwd_dev(
+        &self,
+        probs: &DevTensor,
+        targets: &DevTensor,
+        n: usize,
+        v: usize,
+        scale: f32,
+    ) -> Result<DevTensor> {
+        if probs.len != n * v || targets.len != n {
+            return Err(err("cross_entropy_bwd_dev input length mismatch"));
+        }
+        let dlogits = self.alloc_dev(probs.len)?;
+        let pipeline = self.pipeline_hip("ce_bwd", CE_BWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[probs.buf.index(), targets.buf.index(), dlogits.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(n as u32),
+                Scalar::U32(v as u32),
+                Scalar::F32(scale),
+            ],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(n as u32 + 255) / 256, 1, 1])?;
+        Ok(dlogits)
+    }
+
+    pub fn embedding_dev(
+        &self,
+        weight: &DevTensor,
+        idx: &DevTensor,
+        vocab: usize,
+        n: usize,
+        c: usize,
+    ) -> Result<DevTensor> {
+        if weight.len != vocab * c || idx.len != n {
+            return Err(err("embedding_dev input length mismatch"));
+        }
+        let out = self.alloc_dev(n * c)?;
+        let pipeline = self.pipeline_hip("emb_gather", EMB_GATHER_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[weight.buf.index(), idx.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(n as u32), Scalar::U32(c as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [((n * c) as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
+    }
+
+    pub fn embedding_bwd_dev(
+        &self,
+        g: &DevTensor,
+        idx: &DevTensor,
+        vocab: usize,
+        n: usize,
+        c: usize,
+    ) -> Result<DevTensor> {
+        if g.len != n * c || idx.len != n {
+            return Err(err("embedding_bwd_dev input length mismatch"));
+        }
+        let dw = self.alloc_dev(vocab * c)?;
+        self.zero_dev(&dw)?;
+        let pipeline = self.pipeline_hip("emb_scatter", EMB_SCATTER_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[g.buf.index(), idx.buf.index(), dw.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(n as u32), Scalar::U32(c as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [((n * c) as u32 + 255) / 256, 1, 1])?;
+        Ok(dw)
+    }
+
+    pub fn bias_add_dev(&self, x: &DevTensor, bias: &DevTensor, c: usize) -> Result<DevTensor> {
+        if c == 0 || x.len % c != 0 || bias.len != c {
+            return Err(err("bias_add_dev input length mismatch"));
+        }
+        let out = self.alloc_dev(x.len)?;
+        let pipeline = self.pipeline_hip("bias_add", BIAS_ADD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), bias.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(x.len as u32), Scalar::U32(c as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
+    }
+
+    pub fn bias_rowsum_dev(&self, g: &DevTensor, rows: usize, c: usize) -> Result<DevTensor> {
+        if g.len != rows * c {
+            return Err(err("bias_rowsum_dev input length mismatch"));
+        }
+        let dbias = self.alloc_dev(c)?;
+        let pipeline = self.pipeline_hip("bias_rowsum", BIAS_ROWSUM_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[g.buf.index(), dbias.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(rows as u32), Scalar::U32(c as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(c as u32 + 255) / 256, 1, 1])?;
+        Ok(dbias)
+    }
+
+    pub fn slice_cols_dev(
+        &self,
+        x: &DevTensor,
+        r: usize,
+        c: usize,
+        len: usize,
+        start: usize,
+    ) -> Result<DevTensor> {
+        if x.len != r * c || start + len > c {
+            return Err(err("slice_cols_dev input length mismatch"));
+        }
+        let out = self.alloc_dev(r * len)?;
+        let pipeline = self.pipeline_hip("slice_cols", SLICE_COLS_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(r as u32),
+                Scalar::U32(c as u32),
+                Scalar::U32(len as u32),
+                Scalar::U32(start as u32),
+            ],
+        };
+        self.dispatch_profiled(pipeline, bindings, [((r * len) as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
+    }
+
+    pub fn slice_cols_bwd_dev(
+        &self,
+        g: &DevTensor,
+        r: usize,
+        c: usize,
+        len: usize,
+        start: usize,
+    ) -> Result<DevTensor> {
+        if g.len != r * len || start + len > c {
+            return Err(err("slice_cols_bwd_dev input length mismatch"));
+        }
+        let dx = self.alloc_dev(r * c)?;
+        self.zero_dev(&dx)?;
+        let pipeline = self.pipeline_hip("slice_cols_bwd", SLICE_COLS_BWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[g.buf.index(), dx.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(r as u32),
+                Scalar::U32(c as u32),
+                Scalar::U32(len as u32),
+                Scalar::U32(start as u32),
+            ],
+        };
+        self.dispatch_profiled(pipeline, bindings, [((r * len) as u32 + 255) / 256, 1, 1])?;
+        Ok(dx)
     }
 
     fn run_binary(
