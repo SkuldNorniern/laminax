@@ -1,7 +1,10 @@
 #![cfg(feature = "gpu")]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use zengpu::{
     BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice,
@@ -12,6 +15,28 @@ use zengpu_spirv::{ZslShader, zsl};
 use crate::RuntimeError;
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
+
+static UPLOAD_NS: AtomicU64 = AtomicU64::new(0);
+static DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
+static DOWNLOAD_NS: AtomicU64 = AtomicU64::new(0);
+static ALLOC_NS: AtomicU64 = AtomicU64::new(0);
+static N_DISPATCH: AtomicU64 = AtomicU64::new(0);
+
+fn prof() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("ZEN_PROF").is_ok())
+}
+
+pub fn prof_report() -> String {
+    let upload_ms = UPLOAD_NS.swap(0, Ordering::Relaxed) as f64 / 1e6;
+    let dispatch_ms = DISPATCH_NS.swap(0, Ordering::Relaxed) as f64 / 1e6;
+    let download_ms = DOWNLOAD_NS.swap(0, Ordering::Relaxed) as f64 / 1e6;
+    let alloc_ms = ALLOC_NS.swap(0, Ordering::Relaxed) as f64 / 1e6;
+    let n_dispatch = N_DISPATCH.swap(0, Ordering::Relaxed);
+    format!(
+        "UPLOAD {upload_ms:.3} ms | DISPATCH {dispatch_ms:.3} ms | DOWNLOAD {download_ms:.3} ms | ALLOC {alloc_ms:.3} ms | dispatch count {n_dispatch}"
+    )
+}
 
 fn err(s: impl Into<String>) -> RuntimeError {
     RuntimeError::Execution(s.into())
@@ -351,11 +376,16 @@ impl ZenEngine {
         if let Some(buf) = self.pool.lock().unwrap().get_mut(&n).and_then(Vec::pop) {
             return Ok(buf);
         }
-        self.device.create_buffer(BufferDesc {
+        let start = prof().then(Instant::now);
+        let result = self.device.create_buffer(BufferDesc {
             size: (n * 4) as u64,
             usage: BufferUsage::STORAGE | BufferUsage::READBACK,
             memory: MemoryUsage::GpuOnly,
-        })
+        });
+        if let Some(start) = start {
+            ALLOC_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        result
     }
 
     fn recycle(&self, buf: zengpu::BufferHandle, n: usize) {
@@ -418,12 +448,22 @@ impl ZenEngine {
 
     fn upload(&self, data: &[f32]) -> zengpu::Result<zengpu::BufferHandle> {
         let buf = self.alloc(data.len())?;
-        self.device.write_buffer(buf, 0, cast_f32(data))?;
+        let start = prof().then(Instant::now);
+        let result = self.device.write_buffer(buf, 0, cast_f32(data));
+        if let Some(start) = start {
+            UPLOAD_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        result?;
         Ok(buf)
     }
 
     fn download(&self, buf: zengpu::BufferHandle, n: usize) -> zengpu::Result<Vec<f32>> {
-        let raw = self.device.read_buffer(buf, 0, (n * 4) as u64)?;
+        let start = prof().then(Instant::now);
+        let result = self.device.read_buffer(buf, 0, (n * 4) as u64);
+        if let Some(start) = start {
+            DOWNLOAD_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        let raw = result?;
         Ok(cast_u8(&raw).to_vec())
     }
 
@@ -567,7 +607,13 @@ impl ZenEngine {
             scalars:  &scalars,
         };
         let grid = [(n as u32 + 255) / 256, 1, 1];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        let start = prof().then(Instant::now);
+        let result = self.device.dispatch(pipeline, bindings, grid);
+        if let Some(start) = start {
+            DISPATCH_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            N_DISPATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        result.map_err(|e| err(e.to_string()))?;
 
         let out = self.download(bc, n).map_err(|e| err(e.to_string()))?;
 
@@ -599,7 +645,13 @@ impl ZenEngine {
             scalars:  &scalars,
         };
         let grid = [(n as u32 + 255) / 256, 1, 1];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        let start = prof().then(Instant::now);
+        let result = self.device.dispatch(pipeline, bindings, grid);
+        if let Some(start) = start {
+            DISPATCH_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            N_DISPATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        result.map_err(|e| err(e.to_string()))?;
 
         let out = self.download(bb, n).map_err(|e| err(e.to_string()))?;
 
@@ -657,7 +709,13 @@ impl ZenEngine {
             scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
         };
         let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        let start = prof().then(Instant::now);
+        let result = self.device.dispatch(pipeline, bindings, grid);
+        if let Some(start) = start {
+            DISPATCH_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            N_DISPATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        result.map_err(|e| err(e.to_string()))?;
 
         let out = self.download(bc, m * n).map_err(|e| err(e.to_string()))?;
 
@@ -694,7 +752,13 @@ impl ZenEngine {
             scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
         };
         let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        let start = prof().then(Instant::now);
+        let result = self.device.dispatch(pipeline, bindings, grid);
+        if let Some(start) = start {
+            DISPATCH_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            N_DISPATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        result.map_err(|e| err(e.to_string()))?;
 
         let out = self.download(bc, batch * m * n).map_err(|e| err(e.to_string()))?;
 
