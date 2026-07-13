@@ -12,6 +12,8 @@ use zengpu::{
 };
 use zengpu_spirv::{ZslShader, zsl};
 
+use laminax_types::{BFloat16, DTypeId};
+
 use crate::RuntimeError;
 
 pub type Result<T> = std::result::Result<T, RuntimeError>;
@@ -48,6 +50,14 @@ fn cast_f32(v: &[f32]) -> &[u8] {
 
 fn cast_u8(v: &[u8]) -> &[f32] {
     unsafe { std::slice::from_raw_parts(v.as_ptr() as *const f32, v.len() / 4) }
+}
+
+fn elem_bytes(dtype: DTypeId) -> Result<usize> {
+    match dtype {
+        DTypeId::F32 => Ok(4),
+        DTypeId::BF16 => Ok(2),
+        _ => Err(err(format!("unsupported resident device dtype: {dtype:?}"))),
+    }
 }
 
 const TILED_SGEMM_ZSL: ZslShader = zsl!(
@@ -633,6 +643,77 @@ void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
 }
 "#;
 
+// Raw HIP only for now: ZSL does not yet have a bf16 element type.
+const CAST_F32_TO_BF16_HIP: &str = r#"
+__device__ __forceinline__ unsigned short f32_to_bf16(float x) {
+    unsigned int bits = __float_as_uint(x);
+    unsigned int bias = 0x7fffu + ((bits >> 16) & 1u);
+    return (unsigned short)((bits + bias) >> 16);
+}
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, unsigned short* __restrict__ out,
+                unsigned int N) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) out[i] = f32_to_bf16(x[i]);
+}
+"#;
+
+const CAST_BF16_TO_F32_HIP: &str = r#"
+__device__ __forceinline__ float bf16_to_f32(unsigned short x) {
+    return __uint_as_float(((unsigned int)x) << 16);
+}
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const unsigned short* __restrict__ x, float* __restrict__ out,
+                unsigned int N) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) out[i] = bf16_to_f32(x[i]);
+}
+"#;
+
+const COPY_BF16_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const unsigned short* __restrict__ x, unsigned short* __restrict__ out,
+                unsigned int N) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < N) out[i] = x[i];
+}
+"#;
+
+const TILED_SGEMM_BF16_HIP: &str = r#"
+#define TILE 16
+__device__ __forceinline__ float bf16_to_f32(unsigned short x) {
+    return __uint_as_float(((unsigned int)x) << 16);
+}
+__device__ __forceinline__ unsigned short f32_to_bf16(float x) {
+    unsigned int bits = __float_as_uint(x);
+    unsigned int bias = 0x7fffu + ((bits >> 16) & 1u);
+    return (unsigned short)((bits + bias) >> 16);
+}
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const unsigned short* __restrict__ A,
+                const unsigned short* __restrict__ B,
+                unsigned short* __restrict__ C,
+                unsigned int M, unsigned int N, unsigned int K) {
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+    unsigned int tx = threadIdx.x, ty = threadIdx.y;
+    unsigned int row = blockIdx.y * TILE + ty;
+    unsigned int col = blockIdx.x * TILE + tx;
+    float acc = 0.0f;
+    unsigned int tiles = (K + TILE - 1) / TILE;
+    for (unsigned int t = 0; t < tiles; ++t) {
+        unsigned int aCol = t * TILE + tx;
+        unsigned int bRow = t * TILE + ty;
+        As[ty][tx] = (row < M && aCol < K) ? bf16_to_f32(A[row * K + aCol]) : 0.0f;
+        Bs[ty][tx] = (bRow < K && col < N) ? bf16_to_f32(B[bRow * N + col]) : 0.0f;
+        __syncthreads();
+        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        __syncthreads();
+    }
+    if (row < M && col < N) C[row * N + col] = f32_to_bf16(acc);
+}
+"#;
+
 const COPY_HIP: &str = r#"
 extern "C" __global__ __launch_bounds__(256)
 void zsl_kernel(const float* __restrict__ x, float* __restrict__ out, unsigned int N) {
@@ -1025,16 +1106,21 @@ struct CachedPipeline {
 /// Max recycled buffers kept per size bucket.
 const POOL_BUCKET_CAP: usize = 32;
 
-/// An owned device-resident f32 buffer. Free it with [`ZenEngine::free_dev`] (returns it to the
+/// An owned device-resident buffer. Free it with [`ZenEngine::free_dev`] (returns it to the
 /// pool) — it does NOT free on Drop (no engine handle here).
 pub struct DevTensor {
     pub(crate) buf: zengpu::BufferHandle,
     pub(crate) len: usize,
+    dtype: DTypeId,
 }
 
 impl DevTensor {
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn dtype(&self) -> DTypeId {
+        self.dtype
     }
 }
 
@@ -1050,7 +1136,8 @@ pub struct ZenEngine {
     /// goes through hiprtc/naga per call otherwise — orders of magnitude slower than
     /// the kernel itself.
     pipelines: Mutex<HashMap<String, CachedPipeline>>,
-    /// Free-list of device buffers keyed by element count; avoids alloc/free per op.
+    /// Free-list of device buffers keyed by byte size; avoids alloc/free per op and keeps
+    /// differently-sized dtype allocations separate.
     pool: Mutex<HashMap<usize, Vec<zengpu::BufferHandle>>>,
 }
 
@@ -1108,15 +1195,15 @@ impl ZenEngine {
         shader.for_backend(self.backend)
     }
 
-    /// Take a pooled `n`-element buffer or create one. Callers must return it
+    /// Take a pooled `byte_size` buffer or create one. Callers must return it
     /// with [`Self::recycle`] instead of destroying it.
-    fn alloc(&self, n: usize) -> zengpu::Result<zengpu::BufferHandle> {
-        if let Some(buf) = self.pool.lock().unwrap().get_mut(&n).and_then(Vec::pop) {
+    fn alloc(&self, byte_size: usize) -> zengpu::Result<zengpu::BufferHandle> {
+        if let Some(buf) = self.pool.lock().unwrap().get_mut(&byte_size).and_then(Vec::pop) {
             return Ok(buf);
         }
         let start = prof().then(Instant::now);
         let result = self.device.create_buffer(BufferDesc {
-            size: (n * 4) as u64,
+            size: byte_size as u64,
             usage: BufferUsage::STORAGE | BufferUsage::READBACK,
             memory: MemoryUsage::GpuOnly,
         });
@@ -1126,7 +1213,7 @@ impl ZenEngine {
         result
     }
 
-    fn recycle(&self, buf: zengpu::BufferHandle, n: usize) {
+    fn recycle(&self, buf: zengpu::BufferHandle, byte_size: usize) {
         let mut pool = self.pool.lock().unwrap();
         let already_pooled = pool
             .values()
@@ -1143,7 +1230,7 @@ impl ZenEngine {
         if already_pooled {
             return;
         }
-        let bucket = pool.entry(n).or_default();
+        let bucket = pool.entry(byte_size).or_default();
         if bucket.len() < POOL_BUCKET_CAP {
             bucket.push(buf);
         } else {
@@ -1241,7 +1328,7 @@ impl ZenEngine {
     }
 
     fn upload(&self, data: &[f32]) -> zengpu::Result<zengpu::BufferHandle> {
-        let buf = self.alloc(data.len())?;
+        let buf = self.alloc(data.len() * 4)?;
         let start = prof().then(Instant::now);
         let result = self.device.write_buffer(buf, 0, cast_f32(data));
         if let Some(start) = start {
@@ -1266,20 +1353,104 @@ impl ZenEngine {
         Ok(DevTensor {
             buf,
             len: data.len(),
+            dtype: DTypeId::F32,
         })
     }
 
+    pub fn upload_dev_bf16(&self, data: &[f32]) -> Result<DevTensor> {
+        let converted: Vec<BFloat16> = data.iter().copied().map(BFloat16::from_f32).collect();
+        let payload = unsafe {
+            std::slice::from_raw_parts(converted.as_ptr() as *const u8, converted.len() * 2)
+        };
+        let tensor = self.alloc_dev_dtype(data.len(), DTypeId::BF16)?;
+        let start = prof().then(Instant::now);
+        let result = self.device.write_buffer(tensor.buf, 0, payload);
+        if let Some(start) = start {
+            UPLOAD_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        if let Err(error) = result {
+            self.free_dev(tensor);
+            return Err(err(error.to_string()));
+        }
+        Ok(tensor)
+    }
+
     pub fn alloc_dev(&self, len: usize) -> Result<DevTensor> {
-        let buf = self.alloc(len).map_err(|e| err(e.to_string()))?;
-        Ok(DevTensor { buf, len })
+        self.alloc_dev_dtype(len, DTypeId::F32)
+    }
+
+    pub fn alloc_dev_dtype(&self, len: usize, dtype: DTypeId) -> Result<DevTensor> {
+        let byte_size = len
+            .checked_mul(elem_bytes(dtype)?)
+            .ok_or_else(|| err("device allocation size overflow"))?;
+        let buf = self.alloc(byte_size).map_err(|e| err(e.to_string()))?;
+        Ok(DevTensor { buf, len, dtype })
     }
 
     pub fn download_dev(&self, t: &DevTensor) -> Result<Vec<f32>> {
-        self.download(t.buf, t.len).map_err(|e| err(e.to_string()))
+        self.download_dev_f32(t)
+    }
+
+    pub fn download_dev_f32(&self, t: &DevTensor) -> Result<Vec<f32>> {
+        if t.dtype == DTypeId::F32 {
+            return self.download(t.buf, t.len).map_err(|e| err(e.to_string()));
+        }
+        if t.dtype != DTypeId::BF16 {
+            return Err(err(format!("unsupported resident device dtype: {:?}", t.dtype)));
+        }
+        let start = prof().then(Instant::now);
+        let result = self.device.read_buffer(t.buf, 0, (t.len * 2) as u64);
+        if let Some(start) = start {
+            DOWNLOAD_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        let raw = result.map_err(|e| err(e.to_string()))?;
+        Ok(raw
+            .chunks_exact(2)
+            .map(|bytes| f32::from_bits((u16::from_le_bytes([bytes[0], bytes[1]]) as u32) << 16))
+            .collect())
     }
 
     pub fn free_dev(&self, t: DevTensor) {
-        self.recycle(t.buf, t.len);
+        let byte_size = t.len * elem_bytes(t.dtype).expect("DevTensor has supported dtype");
+        self.recycle(t.buf, byte_size);
+    }
+
+    pub fn cast_dev(&self, x: &DevTensor, to: DTypeId) -> Result<DevTensor> {
+        elem_bytes(to)?;
+        if x.dtype == to {
+            if to == DTypeId::F32 {
+                return self.copy_dev(x);
+            }
+            if self.backend != BackendPreference::Hip {
+                return Err(err("bf16 device casts currently require the HIP backend"));
+            }
+            let out = self.alloc_dev_dtype(x.len, to)?;
+            let pipeline = self.pipeline_hip("copy_bf16", COPY_BF16_HIP, [256, 1, 1])?;
+            let bindings = Bindings {
+                buffers: &[x.buf.index(), out.buf.index()],
+                textures: &[],
+                scalars: &[Scalar::U32(x.len as u32)],
+            };
+            self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+            return Ok(out);
+        }
+        if self.backend != BackendPreference::Hip {
+            return Err(err("bf16 device casts currently require the HIP backend"));
+        }
+        let (name, source) = match (x.dtype, to) {
+            (DTypeId::F32, DTypeId::BF16) => ("cast_f32_to_bf16", CAST_F32_TO_BF16_HIP),
+            (DTypeId::BF16, DTypeId::F32) => ("cast_bf16_to_f32", CAST_BF16_TO_F32_HIP),
+            _ => return Err(err(format!("unsupported device cast: {:?} -> {to:?}", x.dtype))),
+        };
+        let out = self.alloc_dev_dtype(x.len, to)?;
+        let pipeline = self.pipeline_hip(name, source, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(x.len as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
+        Ok(out)
     }
 
     fn dispatch_profiled(
@@ -1328,6 +1499,54 @@ impl ZenEngine {
             .dispatch(pipeline, bindings, grid)
             .map_err(|e| err(e.to_string()))?;
 
+        Ok(c)
+    }
+
+    /// HIP-only bf16 GEMM foundation. Inputs and output are bf16; tile loads and accumulation
+    /// are f32. A portable ZSL variant can be added once ZSL has a bf16 element type.
+    pub fn matmul_bf16_dev(
+        &self,
+        a: &DevTensor,
+        b: &DevTensor,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<DevTensor> {
+        if a.dtype != DTypeId::BF16 || b.dtype != DTypeId::BF16 {
+            return Err(err("matmul_bf16_dev requires bf16 operands"));
+        }
+        if self.backend != BackendPreference::Hip {
+            return Err(err("bf16 device GEMM currently requires the HIP backend"));
+        }
+        if a.len != m * k || b.len != k * n {
+            return Err(err(format!(
+                "bf16 GEMM shape mismatch: A={}, B={}, expected {} and {}",
+                a.len,
+                b.len,
+                m * k,
+                k * n
+            )));
+        }
+        let c = self.alloc_dev_dtype(m * n, DTypeId::BF16)?;
+        let pipeline = self.pipeline_hip(
+            "sgemm_bf16_tiled",
+            TILED_SGEMM_BF16_HIP,
+            [16, 16, 1],
+        )?;
+        let bindings = Bindings {
+            buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
+        };
+        self.dispatch_profiled(
+            pipeline,
+            bindings,
+            [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1],
+        )?;
         Ok(c)
     }
 
@@ -1950,7 +2169,7 @@ impl ZenEngine {
         let n = a.len();
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
-        let bc = self.alloc(n).map_err(|e| err(e.to_string()))?;
+        let bc = self.alloc(n * 4).map_err(|e| err(e.to_string()))?;
 
         let pipeline = self.kernel_pipeline(name, shader, None, [256, 1, 1])?;
 
@@ -1973,9 +2192,9 @@ impl ZenEngine {
 
         let out = self.download(bc, n).map_err(|e| err(e.to_string()))?;
 
-        self.recycle(ba, n);
-        self.recycle(bb, n);
-        self.recycle(bc, n);
+        self.recycle(ba, n * 4);
+        self.recycle(bb, n * 4);
+        self.recycle(bc, n * 4);
         Ok(out)
     }
 
@@ -1988,7 +2207,7 @@ impl ZenEngine {
     ) -> Result<Vec<f32>> {
         let n = a.len();
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
-        let bb = self.alloc(n).map_err(|e| err(e.to_string()))?;
+        let bb = self.alloc(n * 4).map_err(|e| err(e.to_string()))?;
 
         let pipeline = self.kernel_pipeline(name, shader, None, [256, 1, 1])?;
 
@@ -2011,8 +2230,8 @@ impl ZenEngine {
 
         let out = self.download(bb, n).map_err(|e| err(e.to_string()))?;
 
-        self.recycle(ba, n);
-        self.recycle(bb, n);
+        self.recycle(ba, n * 4);
+        self.recycle(bb, n * 4);
         Ok(out)
     }
 
@@ -2051,7 +2270,7 @@ impl ZenEngine {
     pub fn matmul(&self, a: &[f32], b: &[f32], m: usize, n: usize, k: usize) -> Result<Vec<f32>> {
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
-        let bc = self.alloc(m * n).map_err(|e| err(e.to_string()))?;
+        let bc = self.alloc(m * n * 4).map_err(|e| err(e.to_string()))?;
 
         let pipeline = self.kernel_pipeline(
             "sgemm_tiled",
@@ -2080,9 +2299,9 @@ impl ZenEngine {
 
         let out = self.download(bc, m * n).map_err(|e| err(e.to_string()))?;
 
-        self.recycle(ba, a.len());
-        self.recycle(bb, b.len());
-        self.recycle(bc, m * n);
+        self.recycle(ba, a.len() * 4);
+        self.recycle(bb, b.len() * 4);
+        self.recycle(bc, m * n * 4);
         Ok(out)
     }
 
@@ -2099,7 +2318,7 @@ impl ZenEngine {
     ) -> Result<Vec<f32>> {
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
-        let bc = self.alloc(batch * m * n).map_err(|e| err(e.to_string()))?;
+        let bc = self.alloc(batch * m * n * 4).map_err(|e| err(e.to_string()))?;
 
         let pipeline = self.kernel_pipeline(
             "bgemm_tiled",
@@ -2130,9 +2349,9 @@ impl ZenEngine {
             .download(bc, batch * m * n)
             .map_err(|e| err(e.to_string()))?;
 
-        self.recycle(ba, a.len());
-        self.recycle(bb, b.len());
-        self.recycle(bc, batch * m * n);
+        self.recycle(ba, a.len() * 4);
+        self.recycle(bb, b.len() * 4);
+        self.recycle(bc, batch * m * n * 4);
         Ok(out)
     }
 
@@ -2227,6 +2446,94 @@ mod tests {
         engine.free_dev(dc);
 
         assert!(max_err < 1e-3, "max error {max_err} exceeded tolerance");
+        Ok(())
+    }
+
+    #[test]
+    fn bf16_upload_roundtrip_and_gemm() -> Result<()> {
+        let engine = match ZenEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => {
+                println!("skipping bf16_upload_roundtrip_and_gemm: {error}");
+                return Ok(());
+            }
+        };
+        if engine.backend() != BackendPreference::Hip {
+            println!("skipping bf16_upload_roundtrip_and_gemm: HIP backend unavailable");
+            return Ok(());
+        }
+
+        let roundtrip_input = [-3.1415927, -0.1251, 0.0, 0.33333334, 1.001, 127.75];
+        let roundtrip_dev = engine.upload_dev_bf16(&roundtrip_input)?;
+        assert_eq!(roundtrip_dev.dtype(), DTypeId::BF16);
+        let roundtrip = engine.download_dev_f32(&roundtrip_dev)?;
+        let roundtrip_err = roundtrip
+            .iter()
+            .zip(roundtrip_input)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        let roundtrip_rel_err = roundtrip
+            .iter()
+            .zip(roundtrip_input)
+            .filter(|(_, expected)| *expected != 0.0)
+            .map(|(actual, expected)| (actual - expected).abs() / expected.abs())
+            .fold(0.0_f32, f32::max);
+        println!(
+            "bf16 round-trip max abs err: {roundtrip_err}, max rel err: {roundtrip_rel_err}"
+        );
+        engine.free_dev(roundtrip_dev);
+        assert!(roundtrip_rel_err < 8e-3, "bf16 round-trip error {roundtrip_rel_err}");
+
+        let cast_src = engine.upload_dev(&roundtrip_input)?;
+        let cast_bf16 = engine.cast_dev(&cast_src, DTypeId::BF16)?;
+        let cast_f32 = engine.cast_dev(&cast_bf16, DTypeId::F32)?;
+        let cast_roundtrip = engine.download_dev_f32(&cast_f32)?;
+        let cast_rel_err = cast_roundtrip
+            .iter()
+            .zip(roundtrip_input)
+            .filter(|(_, expected)| *expected != 0.0)
+            .map(|(actual, expected)| (actual - expected).abs() / expected.abs())
+            .fold(0.0_f32, f32::max);
+        println!("bf16 device cast round-trip max rel err: {cast_rel_err}");
+        engine.free_dev(cast_src);
+        engine.free_dev(cast_bf16);
+        engine.free_dev(cast_f32);
+        assert!(cast_rel_err < 8e-3, "bf16 device cast error {cast_rel_err}");
+
+        const M: usize = 37;
+        const N: usize = 29;
+        const K: usize = 41;
+        let a: Vec<f32> = (0..M * K)
+            .map(|i| ((i * 17 + 3) % 101) as f32 / 101.0)
+            .collect();
+        let b: Vec<f32> = (0..K * N)
+            .map(|i| ((i * 29 + 7) % 103) as f32 / 103.0)
+            .collect();
+        let mut expected = vec![0.0; M * N];
+        for row in 0..M {
+            for col in 0..N {
+                for inner in 0..K {
+                    expected[row * N + col] += a[row * K + inner] * b[inner * N + col];
+                }
+            }
+        }
+
+        let da = engine.upload_dev_bf16(&a)?;
+        let db = engine.upload_dev_bf16(&b)?;
+        let dc = engine.matmul_bf16_dev(&da, &db, M, N, K)?;
+        assert_eq!(dc.dtype(), DTypeId::BF16);
+        let actual = engine.download_dev_f32(&dc)?;
+        let max_rel_err = actual
+            .iter()
+            .zip(&expected)
+            .map(|(actual, expected)| (actual - expected).abs() / expected.abs().max(1e-6))
+            .fold(0.0_f32, f32::max);
+        println!("bf16 GEMM max rel err: {max_rel_err}");
+
+        engine.free_dev(da);
+        engine.free_dev(db);
+        engine.free_dev(dc);
+        assert!(max_rel_err < 2e-2, "bf16 GEMM relative error {max_rel_err}");
         Ok(())
     }
 }
