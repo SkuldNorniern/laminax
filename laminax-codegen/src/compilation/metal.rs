@@ -1,7 +1,7 @@
 //! Metal compilation.
 
-use crate::compilation::Compiler;
 use crate::CodegenError;
+use crate::compilation::Compiler;
 
 /// Metal compiler implementation
 pub struct MetalCompiler;
@@ -24,4 +24,3 @@ impl Compiler for MetalCompiler {
         "Metal Compiler"
     }
 }
-

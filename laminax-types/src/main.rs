@@ -1,7 +1,6 @@
 use laminax_types::{
-    Array, CpuBytesArray, CpuStorage, Tensor, NdArray, Shape, Strides, DType,
-    add, mul, sum, F32,
-    CudaDevice, MetalDevice, RocmDevice, GpuArray, CoralDevice, TpuDevice, Device,
+    Array, CoralDevice, CpuBytesArray, CpuStorage, CudaDevice, DType, Device, F32, GpuArray,
+    MetalDevice, NdArray, RocmDevice, Shape, Strides, Tensor, TpuDevice, add, mul, sum,
 };
 
 // Helper function to extract f32 data from NdArray
@@ -18,11 +17,7 @@ fn extract_f32_data(array: &Box<dyn NdArray>) -> Result<Vec<f32>, String> {
         if bytes.len() != len * 4 {
             return Err("Byte length mismatch".to_string());
         }
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            result.as_mut_ptr() as *mut u8,
-            bytes.len(),
-        );
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), result.as_mut_ptr() as *mut u8, bytes.len());
     }
 
     Ok(result)
@@ -61,19 +56,36 @@ fn main() {
     let result_sum_typed = sum(&array1_typed, None).unwrap();
 
     println!("Addition result: {:?}", result_add_typed);
-    println!("Addition values: {:?}", extract_f32_data(&result_add_typed).unwrap());
+    println!(
+        "Addition values: {:?}",
+        extract_f32_data(&result_add_typed).unwrap()
+    );
     println!("Multiplication result: {:?}", result_mul_typed);
-    println!("Multiplication values: {:?}", extract_f32_data(&result_mul_typed).unwrap());
+    println!(
+        "Multiplication values: {:?}",
+        extract_f32_data(&result_mul_typed).unwrap()
+    );
     println!("Sum result: {:?}", result_sum_typed);
-    println!("Sum values: {:?}\n", extract_f32_data(&result_sum_typed).unwrap());
+    println!(
+        "Sum values: {:?}\n",
+        extract_f32_data(&result_sum_typed).unwrap()
+    );
 
     // Verify results are mathematically correct
     let add_data = extract_f32_data(&result_add_typed).unwrap();
     let mul_data = extract_f32_data(&result_mul_typed).unwrap();
     let sum_data = extract_f32_data(&result_sum_typed).unwrap();
 
-    assert_eq!(add_data, [6.0, 8.0, 10.0, 12.0], "Addition result incorrect");
-    assert_eq!(mul_data, [5.0, 12.0, 21.0, 32.0], "Multiplication result incorrect");
+    assert_eq!(
+        add_data,
+        [6.0, 8.0, 10.0, 12.0],
+        "Addition result incorrect"
+    );
+    assert_eq!(
+        mul_data,
+        [5.0, 12.0, 21.0, 32.0],
+        "Multiplication result incorrect"
+    );
     assert_eq!(sum_data, [10.0], "Sum result incorrect");
     println!("✓ Typed array operations verified correct\n");
 
@@ -101,19 +113,36 @@ fn main() {
     let result_sum_bytes = sum(&array1_bytes, None).unwrap();
 
     println!("Addition result: {:?}", result_add_bytes);
-    println!("Addition values: {:?}", extract_f32_data(&result_add_bytes).unwrap());
+    println!(
+        "Addition values: {:?}",
+        extract_f32_data(&result_add_bytes).unwrap()
+    );
     println!("Multiplication result: {:?}", result_mul_bytes);
-    println!("Multiplication values: {:?}", extract_f32_data(&result_mul_bytes).unwrap());
+    println!(
+        "Multiplication values: {:?}",
+        extract_f32_data(&result_mul_bytes).unwrap()
+    );
     println!("Sum result: {:?}", result_sum_bytes);
-    println!("Sum values: {:?}\n", extract_f32_data(&result_sum_bytes).unwrap());
+    println!(
+        "Sum values: {:?}\n",
+        extract_f32_data(&result_sum_bytes).unwrap()
+    );
 
     // Verify results are mathematically correct
     let add_data_bytes = extract_f32_data(&result_add_bytes).unwrap();
     let mul_data_bytes = extract_f32_data(&result_mul_bytes).unwrap();
     let sum_data_bytes = extract_f32_data(&result_sum_bytes).unwrap();
 
-    assert_eq!(add_data_bytes, [6.0, 8.0, 10.0, 12.0], "Byte array addition result incorrect");
-    assert_eq!(mul_data_bytes, [5.0, 12.0, 21.0, 32.0], "Byte array multiplication result incorrect");
+    assert_eq!(
+        add_data_bytes,
+        [6.0, 8.0, 10.0, 12.0],
+        "Byte array addition result incorrect"
+    );
+    assert_eq!(
+        mul_data_bytes,
+        [5.0, 12.0, 21.0, 32.0],
+        "Byte array multiplication result incorrect"
+    );
     assert_eq!(sum_data_bytes, [10.0], "Byte array sum result incorrect");
     println!("✓ Byte array operations verified correct\n");
 
@@ -127,18 +156,31 @@ fn main() {
     let result_mixed_mul = mul(&array1_bytes, &array2_typed).unwrap();
 
     println!("Typed + Bytes: {:?}", result_mixed_add);
-    println!("Typed + Bytes values: {:?}", extract_f32_data(&result_mixed_add).unwrap());
+    println!(
+        "Typed + Bytes values: {:?}",
+        extract_f32_data(&result_mixed_add).unwrap()
+    );
     println!("Bytes * Typed: {:?}", result_mixed_mul);
-    println!("Bytes * Typed values: {:?}\n", extract_f32_data(&result_mixed_mul).unwrap());
+    println!(
+        "Bytes * Typed values: {:?}\n",
+        extract_f32_data(&result_mixed_mul).unwrap()
+    );
 
     // Verify cross-backend operations
     let cross_add_data = extract_f32_data(&result_mixed_add).unwrap();
     let cross_mul_data = extract_f32_data(&result_mixed_mul).unwrap();
 
-    assert_eq!(cross_add_data, [6.0, 8.0, 10.0, 12.0], "Cross-backend addition result incorrect");
-    assert_eq!(cross_mul_data, [5.0, 12.0, 21.0, 32.0], "Cross-backend multiplication result incorrect");
+    assert_eq!(
+        cross_add_data,
+        [6.0, 8.0, 10.0, 12.0],
+        "Cross-backend addition result incorrect"
+    );
+    assert_eq!(
+        cross_mul_data,
+        [5.0, 12.0, 21.0, 32.0],
+        "Cross-backend multiplication result incorrect"
+    );
     println!("✓ Cross-backend operations verified correct\n");
-
 
     // ========================================
     // Backend Comparison
@@ -148,17 +190,33 @@ fn main() {
     // Demonstrate that the same operations work on different concrete backend types
     println!("Backend 1 (Array<f32>):");
     println!("  Type: {}", std::any::type_name::<Array<f32>>());
-    println!("  Shape: {}, DType: {}, Host-accessible: {}",
-             array1_typed.shape(), array1_typed.dtype(), array1_typed.is_host_accessible());
+    println!(
+        "  Shape: {}, DType: {}, Host-accessible: {}",
+        array1_typed.shape(),
+        array1_typed.dtype(),
+        array1_typed.is_host_accessible()
+    );
     let _sum_typed = sum(&array1_typed, None).unwrap();
-    println!("  Sum shape: {}, dtype: {}", _sum_typed.shape(), _sum_typed.dtype());
+    println!(
+        "  Sum shape: {}, dtype: {}",
+        _sum_typed.shape(),
+        _sum_typed.dtype()
+    );
 
     println!("\nBackend 2 (CpuBytesArray):");
     println!("  Type: {}", std::any::type_name::<CpuBytesArray>());
-    println!("  Shape: {}, DType: {}, Host-accessible: {}",
-             array1_bytes.shape(), array1_bytes.dtype(), array1_bytes.is_host_accessible());
+    println!(
+        "  Shape: {}, DType: {}, Host-accessible: {}",
+        array1_bytes.shape(),
+        array1_bytes.dtype(),
+        array1_bytes.is_host_accessible()
+    );
     let _sum_bytes = sum(&array1_bytes, None).unwrap();
-    println!("  Sum shape: {}, dtype: {}", _sum_bytes.shape(), _sum_bytes.dtype());
+    println!(
+        "  Sum shape: {}, dtype: {}",
+        _sum_bytes.shape(),
+        _sum_bytes.dtype()
+    );
 
     println!("\n✓ Both backends produce compatible results through the NdArray trait");
 
@@ -176,8 +234,16 @@ fn main() {
         Box::new(CpuStorage::new(data, shape, dtype))
     });
 
-    println!("Tensor A: {} with shape {:?}", tensor_a.dtype(), tensor_a.shape());
-    println!("Tensor B: {} with shape {:?}", tensor_b.dtype(), tensor_b.shape());
+    println!(
+        "Tensor A: {} with shape {:?}",
+        tensor_a.dtype(),
+        tensor_a.shape()
+    );
+    println!(
+        "Tensor B: {} with shape {:?}",
+        tensor_b.dtype(),
+        tensor_b.shape()
+    );
     println!("Same shape: {}", tensor_a.shape() == tensor_b.shape());
     println!("Same dtype: {}\n", tensor_a.dtype() == tensor_b.dtype());
 
@@ -196,7 +262,10 @@ fn main() {
     let small_array = Array::new(small_data.clone(), small_shape).unwrap();
     let small_sum_result = sum(&small_array, None).unwrap();
     let small_sum_values = extract_f32_data(&small_sum_result).unwrap();
-    println!("Small array [1,2,3,4,5] sum: {} (expected: 15)", small_sum_values[0]);
+    println!(
+        "Small array [1,2,3,4,5] sum: {} (expected: 15)",
+        small_sum_values[0]
+    );
     assert_eq!(small_sum_values[0], 15.0);
 
     // Create large matrices (100x100 = 10,000 elements)
@@ -217,9 +286,21 @@ fn main() {
     let large_mul_result = mul(&large_array_a_typed, &large_array_b_typed).unwrap();
     let large_sum_result = sum(&large_array_a_typed, None).unwrap();
 
-    println!("Large matrix addition: shape={}, dtype={}", large_add_result.shape(), large_add_result.dtype());
-    println!("Large matrix multiplication: shape={}, dtype={}", large_mul_result.shape(), large_mul_result.dtype());
-    println!("Large matrix sum: shape={}, dtype={}", large_sum_result.shape(), large_sum_result.dtype());
+    println!(
+        "Large matrix addition: shape={}, dtype={}",
+        large_add_result.shape(),
+        large_add_result.dtype()
+    );
+    println!(
+        "Large matrix multiplication: shape={}, dtype={}",
+        large_mul_result.shape(),
+        large_mul_result.dtype()
+    );
+    println!(
+        "Large matrix sum: shape={}, dtype={}",
+        large_sum_result.shape(),
+        large_sum_result.dtype()
+    );
 
     // Verify some sample values from the results
     let add_sample = extract_f32_data(&large_add_result).unwrap();
@@ -235,12 +316,18 @@ fn main() {
     // The expected sum is the sum of f32 values (not perfect due to f32 precision)
     let expected_sum: f32 = large_data_a.iter().sum::<f32>();
     // Verify the sum matches (accounting for f32 precision limitations)
-    assert!((sum_sample[0] - expected_sum).abs() < 1.0, "Sum should match within f32 precision");
+    assert!(
+        (sum_sample[0] - expected_sum).abs() < 1.0,
+        "Sum should match within f32 precision"
+    );
 
     println!("✓ Large matrix operations verified correct");
     println!("✓ First addition value: {}", add_sample[0]);
     println!("✓ First multiplication value: {}", mul_sample[0]);
-    println!("✓ Sum value: {} (expected: {})", sum_sample[0], expected_sum);
+    println!(
+        "✓ Sum value: {} (expected: {})",
+        sum_sample[0], expected_sum
+    );
 
     // ========================================
     // Specialized Backend Arrays Demo

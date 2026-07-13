@@ -3,8 +3,11 @@
 //! Provides GPU-accelerated arrays for AMD GPUs using ROCm/HIP.
 //! Similar to CUDA but optimized for AMD hardware and open-source stack.
 
-use std::sync::Arc;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    sync::Arc,
+};
 
 use super::{Device, DeviceCapabilities, DeviceType};
 
@@ -61,6 +64,7 @@ impl Device for RocmDevice {
 #[derive(Debug)]
 pub struct RocmArray {
     shape: Shape,
+    strides: Strides,
     dtype: DType,
     device: Arc<RocmDevice>,
     // In real implementation:
@@ -74,6 +78,7 @@ impl RocmArray {
     pub fn new(shape: Shape, dtype: DType, device: Arc<RocmDevice>) -> Result<Self, String> {
         // In real implementation: hipMalloc
         Ok(Self {
+            strides: Strides::from_shape(&shape),
             shape,
             dtype,
             device,
@@ -81,7 +86,11 @@ impl RocmArray {
     }
 
     /// Create ROCm array from host data
-    pub fn from_slice<T: Copy>(data: &[T], shape: Shape, device: Arc<RocmDevice>) -> Result<Self, String> {
+    pub fn from_slice<T: Copy>(
+        data: &[T],
+        shape: Shape,
+        device: Arc<RocmDevice>,
+    ) -> Result<Self, String> {
         if data.len() != shape.len() {
             return Err("Data length doesn't match shape".to_string());
         }
@@ -122,7 +131,7 @@ impl NdArray for RocmArray {
     }
 
     fn strides(&self) -> &Strides {
-        unimplemented!("ROCm strides not implemented - arrays assumed contiguous")
+        &self.strides
     }
 
     fn len(&self) -> usize {
@@ -145,6 +154,7 @@ impl NdArray for RocmArray {
         // In real implementation: allocate new GPU memory and copy
         Box::new(Self {
             shape: self.shape.clone(),
+            strides: self.strides.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         })
@@ -155,6 +165,7 @@ impl NdArray for RocmArray {
             return Err("Reshape must preserve element count".to_string());
         }
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -167,6 +178,7 @@ impl NdArray for RocmArray {
         }
         let new_shape = Shape::from([self.shape.dim(1), self.shape.dim(0)]);
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -190,8 +202,8 @@ impl NdArray for RocmArray {
     }
 }
 
-impl std::fmt::Display for RocmArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for RocmArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "RocmArray({}, {}, device: {})",

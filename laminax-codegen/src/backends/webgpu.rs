@@ -1,7 +1,7 @@
 //! WebGPU backend for web and cross-platform compute.
 
-use crate::backends::{Backend, BackendCapabilities};
 use crate::CodegenError;
+use crate::backends::{Backend, BackendCapabilities};
 
 /// WebGPU backend implementation
 pub struct WebGpuBackend;
@@ -19,7 +19,10 @@ impl WebGpuBackend {
     }
 
     /// Compile from LCIR to WGSL
-    pub fn compile_from_lcir(&self, _kernel: &laminax_lcir::Kernel) -> std::result::Result<Vec<u8>, crate::CodegenError> {
+    pub fn compile_from_lcir(
+        &self,
+        _kernel: &laminax_lcir::Kernel,
+    ) -> std::result::Result<Vec<u8>, crate::CodegenError> {
         let wgsl = crate::lowering::spirv::lower_lcir_to_wgsl(_kernel)?;
         self.compile_wgsl(&wgsl)
     }
@@ -48,4 +51,3 @@ impl Backend for WebGpuBackend {
         "WebGPU"
     }
 }
-

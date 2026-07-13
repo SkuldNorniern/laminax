@@ -3,8 +3,13 @@
 //! Provides a unified interface for GPU arrays across different backends
 //! (CUDA, Metal, Vulkan, ROCm). Automatically selects the best available backend.
 
-use std::sync::Arc;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    path::Path,
+    sync::Arc,
+    thread,
+};
 
 use super::{Device, DeviceCapabilities, DeviceType};
 
@@ -52,12 +57,13 @@ impl GpuDevice {
         #[cfg(target_os = "linux")]
         {
             // Check for CUDA first
-            if std::path::Path::new("/usr/lib/x86_64-linux-gnu/libcuda.so").exists() ||
-               std::path::Path::new("/usr/local/cuda/lib64/libcudart.so").exists() {
+            if Path::new("/usr/lib/x86_64-linux-gnu/libcuda.so").exists()
+                || Path::new("/usr/local/cuda/lib64/libcudart.so").exists()
+            {
                 return Ok(GpuBackendType::Cuda);
             }
             // Check for ROCm
-            if std::path::Path::new("/opt/rocm/lib/libamdhip64.so").exists() {
+            if Path::new("/opt/rocm/lib/libamdhip64.so").exists() {
                 return Ok(GpuBackendType::Rocm);
             }
         }
@@ -80,7 +86,10 @@ impl GpuDevice {
         Ok(GpuBackendType::Vulkan)
     }
 
-    fn get_capabilities_for_backend(backend: GpuBackendType, device_id: i32) -> Result<DeviceCapabilities, String> {
+    fn get_capabilities_for_backend(
+        backend: GpuBackendType,
+        device_id: i32,
+    ) -> Result<DeviceCapabilities, String> {
         let base_capabilities = match backend {
             GpuBackendType::Cuda => DeviceCapabilities {
                 device_type: DeviceType::Cuda,
@@ -102,9 +111,13 @@ impl GpuDevice {
                 max_work_group_size: 1024,
                 local_memory_size: 32 * 1024, // 32KB threadgroup memory
                 global_memory_size: {
-                    std::thread::available_parallelism()
+                    thread::available_parallelism()
                         .map(|n| n.get())
-                        .unwrap_or(1) * 8 * 1024 * 1024 * 1024
+                        .unwrap_or(1)
+                        * 8
+                        * 1024
+                        * 1024
+                        * 1024
                 },
                 supports_fp64: false,
                 supports_fp16: true,
@@ -130,7 +143,7 @@ impl GpuDevice {
                 name: format!("GPU Device {} (ROCm)", device_id),
                 compute_units: 60, // Default CU count
                 max_work_group_size: 1024,
-                local_memory_size: 64 * 1024, // 64KB LDS
+                local_memory_size: 64 * 1024,                // 64KB LDS
                 global_memory_size: 16 * 1024 * 1024 * 1024, // 16GB default
                 supports_fp64: true,
                 supports_fp16: true,
@@ -180,6 +193,7 @@ impl Device for GpuDevice {
 #[derive(Debug)]
 pub struct GpuArray {
     shape: Shape,
+    strides: Strides,
     dtype: DType,
     device: Arc<GpuDevice>,
     // In real implementation:
@@ -198,9 +212,14 @@ impl GpuArray {
     }
 
     /// Create a new GPU array with specific device
-    pub fn new_with_device(shape: Shape, dtype: DType, device: Arc<GpuDevice>) -> Result<Self, String> {
+    pub fn new_with_device(
+        shape: Shape,
+        dtype: DType,
+        device: Arc<GpuDevice>,
+    ) -> Result<Self, String> {
         // In real implementation: allocate GPU memory based on backend
         Ok(Self {
+            strides: Strides::from_shape(&shape),
             shape,
             dtype,
             device,
@@ -242,7 +261,7 @@ impl NdArray for GpuArray {
     }
 
     fn strides(&self) -> &Strides {
-        unimplemented!("GPU strides not implemented - arrays assumed contiguous")
+        &self.strides
     }
 
     fn len(&self) -> usize {
@@ -265,6 +284,7 @@ impl NdArray for GpuArray {
         // In real implementation: allocate new GPU memory and copy
         Box::new(Self {
             shape: self.shape.clone(),
+            strides: self.strides.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         })
@@ -275,6 +295,7 @@ impl NdArray for GpuArray {
             return Err("Reshape must preserve element count".to_string());
         }
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -287,6 +308,7 @@ impl NdArray for GpuArray {
         }
         let new_shape = Shape::from([self.shape.dim(1), self.shape.dim(0)]);
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -306,12 +328,13 @@ impl NdArray for GpuArray {
     }
 
     fn new_array(&self, shape: Shape, dtype: DType) -> Result<Box<dyn NdArray>, String> {
-        Self::new_with_device(shape, dtype, self.device.clone()).map(|arr| Box::new(arr) as Box<dyn NdArray>)
+        Self::new_with_device(shape, dtype, self.device.clone())
+            .map(|arr| Box::new(arr) as Box<dyn NdArray>)
     }
 }
 
-impl std::fmt::Display for GpuArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for GpuArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "GpuArray({}, {}, backend: {:?}, device: {})",

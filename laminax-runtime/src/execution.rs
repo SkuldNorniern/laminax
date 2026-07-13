@@ -5,9 +5,9 @@
 use super::Result;
 use super::graph::ExecutionPlan;
 use super::memory::{Buffer, MemoryManager};
-use laminax_types::{DType, Shape};
 use laminax_lcir as lcir;
 use laminax_types::Device;
+use laminax_types::{DType, Shape};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -94,7 +94,12 @@ impl Executor {
         use lcir::Operation;
 
         match &node.operation {
-            Operation::Binary { result, lhs, op, rhs } => {
+            Operation::Binary {
+                result,
+                lhs,
+                op,
+                rhs,
+            } => {
                 self.execute_binary_op(buffers, result, lhs, rhs, op)?;
             }
             Operation::Unary { result, op, input } => {
@@ -139,11 +144,19 @@ impl Executor {
                         lcir::BinaryOp::Sub => lhs_val - rhs_val,
                         lcir::BinaryOp::Mul => lhs_val * rhs_val,
                         lcir::BinaryOp::Div => lhs_val / rhs_val,
-                        _ => return Err(super::RuntimeError::Execution("Unsupported binary op".to_string())),
+                        _ => {
+                            return Err(super::RuntimeError::Execution(
+                                "Unsupported binary op".to_string(),
+                            ));
+                        }
                     };
                     self.write_i32(result_buf, i, result_val);
                 }
-                _ => return Err(super::RuntimeError::Execution("Unsupported dtype".to_string())),
+                _ => {
+                    return Err(super::RuntimeError::Execution(
+                        "Unsupported dtype".to_string(),
+                    ));
+                }
             }
         }
 
@@ -212,13 +225,13 @@ impl Executor {
     fn read_i32(&self, buffer: &Buffer, index: usize) -> i32 {
         let data = buffer.data.lock().unwrap();
         let offset = index * 4; // i32 is 4 bytes
-        i32::from_le_bytes(data[offset..offset+4].try_into().unwrap())
+        i32::from_le_bytes(data[offset..offset + 4].try_into().unwrap())
     }
 
     fn write_i32(&self, buffer: &Buffer, index: usize, value: i32) {
         let mut data = buffer.data.lock().unwrap();
         let offset = index * 4; // i32 is 4 bytes
-        data[offset..offset+4].copy_from_slice(&value.to_le_bytes());
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     /// Compile a kernel for this device (placeholder)

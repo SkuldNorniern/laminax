@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Generic DAG for Laminax (op order, parallel levels); tensor graphs and other consumers build on this."
 
+[lints]
+workspace = true
+
 [dependencies]

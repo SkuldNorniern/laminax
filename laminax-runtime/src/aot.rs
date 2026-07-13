@@ -10,7 +10,7 @@
 
 use super::Result;
 use super::RuntimeError;
-use lamina::runtime::{compile_to_runtime, execute_jit_function, RuntimeResult};
+use lamina::runtime::{RuntimeResult, compile_to_runtime, execute_jit_function};
 use lamina_platform::{TargetArchitecture, TargetOperatingSystem};
 use laminax_lcir::Kernel;
 
@@ -63,10 +63,8 @@ pub fn compile_kernel(kernel: &Kernel) -> Result<CompiledKernel> {
         .map_err(|e| RuntimeError::Compilation(format!("lamina parse failed: {:?}", e)))?;
 
     // 3. Lower IR → MIR
-    let mir_module =
-        lamina::mir::codegen::from_ir(&ir_module, "laminax_kernel").map_err(|e| {
-            RuntimeError::Compilation(format!("lamina IR → MIR failed: {:?}", e))
-        })?;
+    let mir_module = lamina::mir::codegen::from_ir(&ir_module, "laminax_kernel")
+        .map_err(|e| RuntimeError::Compilation(format!("lamina IR → MIR failed: {:?}", e)))?;
 
     // Count parameters from the first function in the kernel
     let arg_count = mir_module
@@ -110,9 +108,8 @@ pub unsafe fn call_kernel(compiled: &CompiledKernel, args: &[i64]) -> Result<()>
     let sig = make_i64_sig(compiled.arg_count);
 
     unsafe {
-        execute_jit_function(&sig, compiled.function_ptr, Some(args), false, None).map_err(
-            |e| RuntimeError::Execution(format!("kernel execution failed: {:?}", e)),
-        )?;
+        execute_jit_function(&sig, compiled.function_ptr, Some(args), false, None)
+            .map_err(|e| RuntimeError::Execution(format!("kernel execution failed: {:?}", e)))?;
     }
     Ok(())
 }

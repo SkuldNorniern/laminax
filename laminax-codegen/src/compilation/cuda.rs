@@ -1,7 +1,7 @@
 //! CUDA/HIP compilation.
 
-use crate::compilation::Compiler;
 use crate::CodegenError;
+use crate::compilation::Compiler;
 
 /// CUDA/HIP compiler implementation
 pub struct CudaCompiler;
@@ -24,4 +24,3 @@ impl Compiler for CudaCompiler {
         "CUDA Compiler"
     }
 }
-

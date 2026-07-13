@@ -3,8 +3,23 @@ name = "laminax"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+resolver = "2"
+members = ["laminax-codegen", "laminax-dag", "laminax-lcir", "laminax-runtime", "laminax-types"]
+
+[workspace.lints.clippy]
+absolute_paths = "deny"
+result_large_err = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+
+[lints]
+workspace = true
+
 [dependencies]
-lamina = { path = "../lamina", features = ["encoder"] }
 laminax-types = { path = "laminax-types" }
 laminax-lcir = { path = "laminax-lcir" }
 laminax-runtime = { path = "laminax-runtime" }

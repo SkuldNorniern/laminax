@@ -1,14 +1,14 @@
 #![cfg(feature = "gpu")]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use zengpu::{
-    BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice,
-    Instance, MemoryUsage, Scalar, ShaderDesc,
+    BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice, Instance,
+    MemoryUsage, Scalar, ShaderDesc,
 };
 use zengpu_spirv::{ZslShader, zsl};
 
@@ -561,19 +561,23 @@ impl ZenEngine {
     /// Open the `index`-th GPU adapter. Each engine owns one device; for multi-GPU,
     /// create one engine per adapter and drive them from separate threads.
     pub fn with_adapter(index: usize) -> Result<Self> {
-        let (instance, backend) = build_instance()
-            .map_err(|e| err(format!("ZenGPU init: {e}")))?;
+        let (instance, backend) = build_instance().map_err(|e| err(format!("ZenGPU init: {e}")))?;
         let adapters = instance.enumerate_adapters();
         if adapters.is_empty() {
             return Err(err("no ZenGPU adapters found"));
         }
-        let adapter = adapters
-            .get(index)
-            .ok_or_else(|| err(format!("adapter {index} out of range ({} found)", adapters.len())))?;
+        let adapter = adapters.get(index).ok_or_else(|| {
+            err(format!(
+                "adapter {index} out of range ({} found)",
+                adapters.len()
+            ))
+        })?;
         let device_name = adapter.info().name.clone();
-        let device: Arc<dyn GpuDevice> =
-            Arc::from(adapter.open(zengpu::DeviceRequest::default())
-                .map_err(|e| err(format!("open device: {e}")))?);
+        let device: Arc<dyn GpuDevice> = Arc::from(
+            adapter
+                .open(zengpu::DeviceRequest::default())
+                .map_err(|e| err(format!("open device: {e}")))?,
+        );
         Ok(Self {
             device,
             instance,
@@ -658,15 +662,25 @@ impl ZenEngine {
             return Ok(cached.pipeline);
         }
         let (desc, entry) = self.pick(shader);
-        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
+        let sh = self
+            .device
+            .create_shader(desc)
+            .map_err(|e| err(e.to_string()))?;
         let pipeline = self
             .device
-            .create_compute_pipeline(ComputePipelineDesc { shader: sh, entry, block })
+            .create_compute_pipeline(ComputePipelineDesc {
+                shader: sh,
+                entry,
+                block,
+            })
             .map_err(|e| err(e.to_string()))?;
-        self.pipelines
-            .lock()
-            .unwrap()
-            .insert(name, CachedPipeline { shader: sh, pipeline });
+        self.pipelines.lock().unwrap().insert(
+            name,
+            CachedPipeline {
+                shader: sh,
+                pipeline,
+            },
+        );
         Ok(pipeline)
     }
 
@@ -682,15 +696,25 @@ impl ZenEngine {
         }
         let desc = zengpu::ShaderDesc::hip(src);
         let entry = "zsl_kernel";
-        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
+        let sh = self
+            .device
+            .create_shader(desc)
+            .map_err(|e| err(e.to_string()))?;
         let pipeline = self
             .device
-            .create_compute_pipeline(ComputePipelineDesc { shader: sh, entry, block })
+            .create_compute_pipeline(ComputePipelineDesc {
+                shader: sh,
+                entry,
+                block,
+            })
             .map_err(|e| err(e.to_string()))?;
-        self.pipelines
-            .lock()
-            .unwrap()
-            .insert(name, CachedPipeline { shader: sh, pipeline });
+        self.pipelines.lock().unwrap().insert(
+            name,
+            CachedPipeline {
+                shader: sh,
+                pipeline,
+            },
+        );
         Ok(pipeline)
     }
 
@@ -717,7 +741,10 @@ impl ZenEngine {
 
     pub fn upload_dev(&self, data: &[f32]) -> Result<DevTensor> {
         let buf = self.upload(data).map_err(|e| err(e.to_string()))?;
-        Ok(DevTensor { buf, len: data.len() })
+        Ok(DevTensor {
+            buf,
+            len: data.len(),
+        })
     }
 
     pub fn alloc_dev(&self, len: usize) -> Result<DevTensor> {
@@ -765,12 +792,18 @@ impl ZenEngine {
         };
 
         let bindings = Bindings {
-            buffers:  &[a.buf.index(), b.buf.index(), c.buf.index()],
+            buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
             textures: &[],
-            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
         };
         let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        self.device
+            .dispatch(pipeline, bindings, grid)
+            .map_err(|e| err(e.to_string()))?;
 
         Ok(c)
     }
@@ -793,12 +826,18 @@ impl ZenEngine {
         };
 
         let bindings = Bindings {
-            buffers:  &[a.buf.index(), b.buf.index(), c.buf.index()],
+            buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
             textures: &[],
-            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
         };
         let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        self.device
+            .dispatch(pipeline, bindings, grid)
+            .map_err(|e| err(e.to_string()))?;
 
         Ok(c)
     }
@@ -820,12 +859,14 @@ impl ZenEngine {
         let c = self.alloc_dev(a.len)?;
         let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
         let bindings = Bindings {
-            buffers:  &[a.buf.index(), b.buf.index(), c.buf.index()],
+            buffers: &[a.buf.index(), b.buf.index(), c.buf.index()],
             textures: &[],
-            scalars:  &[Scalar::U32(a.len as u32)],
+            scalars: &[Scalar::U32(a.len as u32)],
         };
         let grid = [(a.len as u32 + 255) / 256, 1, 1];
-        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+        self.device
+            .dispatch(pipeline, bindings, grid)
+            .map_err(|e| err(e.to_string()))?;
 
         Ok(c)
     }
@@ -871,11 +912,14 @@ impl ZenEngine {
     }
 
     pub fn transpose2d_dev(&self, x: &DevTensor, rows: usize, cols: usize) -> Result<DevTensor> {
-        if x.len != rows * cols { return Err(err("transpose2d_dev input length mismatch")); }
+        if x.len != rows * cols {
+            return Err(err("transpose2d_dev input length mismatch"));
+        }
         let out = self.alloc_dev(x.len)?;
         let pipeline = self.pipeline_hip("transpose2d", TRANSPOSE2D_HIP, [256, 1, 1])?;
         let bindings = Bindings {
-            buffers: &[x.buf.index(), out.buf.index()], textures: &[],
+            buffers: &[x.buf.index(), out.buf.index()],
+            textures: &[],
             scalars: &[Scalar::U32(rows as u32), Scalar::U32(cols as u32)],
         };
         self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
@@ -883,7 +927,11 @@ impl ZenEngine {
     }
 
     pub fn transpose_last2_dev(
-        &self, x: &DevTensor, batch: usize, rows: usize, cols: usize,
+        &self,
+        x: &DevTensor,
+        batch: usize,
+        rows: usize,
+        cols: usize,
     ) -> Result<DevTensor> {
         if x.len != batch * rows * cols {
             return Err(err("transpose_last2_dev input length mismatch"));
@@ -891,8 +939,13 @@ impl ZenEngine {
         let out = self.alloc_dev(x.len)?;
         let pipeline = self.pipeline_hip("transpose_last2", TRANSPOSE_LAST2_HIP, [256, 1, 1])?;
         let bindings = Bindings {
-            buffers: &[x.buf.index(), out.buf.index()], textures: &[],
-            scalars: &[Scalar::U32(batch as u32), Scalar::U32(rows as u32), Scalar::U32(cols as u32)],
+            buffers: &[x.buf.index(), out.buf.index()],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(batch as u32),
+                Scalar::U32(rows as u32),
+                Scalar::U32(cols as u32),
+            ],
         };
         self.dispatch_profiled(pipeline, bindings, [(x.len as u32 + 255) / 256, 1, 1])?;
         Ok(out)
@@ -1253,9 +1306,9 @@ impl ZenEngine {
         scalars.extend_from_slice(extra_scalars);
 
         let bindings = Bindings {
-            buffers:  &[ba.index(), bb.index(), bc.index()],
+            buffers: &[ba.index(), bb.index(), bc.index()],
             textures: &[],
-            scalars:  &scalars,
+            scalars: &scalars,
         };
         let grid = [(n as u32 + 255) / 256, 1, 1];
         let start = prof().then(Instant::now);
@@ -1291,9 +1344,9 @@ impl ZenEngine {
         scalars.extend_from_slice(extra_scalars);
 
         let bindings = Bindings {
-            buffers:  &[ba.index(), bb.index()],
+            buffers: &[ba.index(), bb.index()],
             textures: &[],
-            scalars:  &scalars,
+            scalars: &scalars,
         };
         let grid = [(n as u32 + 255) / 256, 1, 1];
         let start = prof().then(Instant::now);
@@ -1355,9 +1408,13 @@ impl ZenEngine {
         };
 
         let bindings = Bindings {
-            buffers:  &[ba.index(), bb.index(), bc.index()],
+            buffers: &[ba.index(), bb.index(), bc.index()],
             textures: &[],
-            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
         };
         let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, 1];
         let start = prof().then(Instant::now);
@@ -1398,9 +1455,13 @@ impl ZenEngine {
         };
 
         let bindings = Bindings {
-            buffers:  &[ba.index(), bb.index(), bc.index()],
+            buffers: &[ba.index(), bb.index(), bc.index()],
             textures: &[],
-            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+            scalars: &[
+                Scalar::U32(m as u32),
+                Scalar::U32(n as u32),
+                Scalar::U32(k as u32),
+            ],
         };
         let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
         let start = prof().then(Instant::now);
@@ -1411,7 +1472,9 @@ impl ZenEngine {
         }
         result.map_err(|e| err(e.to_string()))?;
 
-        let out = self.download(bc, batch * m * n).map_err(|e| err(e.to_string()))?;
+        let out = self
+            .download(bc, batch * m * n)
+            .map_err(|e| err(e.to_string()))?;
 
         self.recycle(ba, a.len());
         self.recycle(bb, b.len());
@@ -1424,7 +1487,9 @@ impl ZenEngine {
     }
 
     pub fn mean(&self, a: &[f32]) -> Result<f32> {
-        if a.is_empty() { return Ok(0.0); }
+        if a.is_empty() {
+            return Ok(0.0);
+        }
         Ok(a.iter().sum::<f32>() / a.len() as f32)
     }
 }
@@ -1487,8 +1552,7 @@ mod tests {
         for row in 0..SIZE {
             for col in 0..SIZE {
                 for inner in 0..SIZE {
-                    expected[row * SIZE + col] +=
-                        a[row * SIZE + inner] * b[inner * SIZE + col];
+                    expected[row * SIZE + col] += a[row * SIZE + inner] * b[inner * SIZE + col];
                 }
             }
         }

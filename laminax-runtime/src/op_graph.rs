@@ -6,6 +6,7 @@
 //! are independent; execution is currently sequential per level.
 
 use super::Result;
+use std::thread;
 
 // ── Fast matmul (aarch64 NEON or scalar tiled) ───────────────────────────────
 // Duplicated from cetana::backend::cpu::compute — laminax-runtime cannot depend
@@ -47,12 +48,17 @@ unsafe fn matmul_neon_f32(c: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usiz
                 let l_end = (l0 + TILE).min(n);
                 let j_end = (j0 + TILE).min(k);
                 let j_16end = j0 + ((j_end - j0) / 16) * 16;
-                let j_4end  = j0 + ((j_end - j0) / 4)  * 4;
+                let j_4end = j0 + ((j_end - j0) / 4) * 4;
                 for i in i0..i_end {
                     for l in l0..l_end {
                         let (a_val, va, c_ptr, b_ptr) = unsafe {
                             let av = *a.get_unchecked(i * n + l);
-                            (av, vdupq_n_f32(av), c.as_mut_ptr().add(i * k), b.as_ptr().add(l * k))
+                            (
+                                av,
+                                vdupq_n_f32(av),
+                                c.as_mut_ptr().add(i * k),
+                                b.as_ptr().add(l * k),
+                            )
                         };
                         let mut j = j0;
                         while j < j_16end {
@@ -65,9 +71,9 @@ unsafe fn matmul_neon_f32(c: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usiz
                                 let vc1 = vld1q_f32(c_ptr.add(j + 4));
                                 let vc2 = vld1q_f32(c_ptr.add(j + 8));
                                 let vc3 = vld1q_f32(c_ptr.add(j + 12));
-                                vst1q_f32(c_ptr.add(j),      vfmaq_f32(vc0, va, vb0));
-                                vst1q_f32(c_ptr.add(j + 4),  vfmaq_f32(vc1, va, vb1));
-                                vst1q_f32(c_ptr.add(j + 8),  vfmaq_f32(vc2, va, vb2));
+                                vst1q_f32(c_ptr.add(j), vfmaq_f32(vc0, va, vb0));
+                                vst1q_f32(c_ptr.add(j + 4), vfmaq_f32(vc1, va, vb1));
+                                vst1q_f32(c_ptr.add(j + 8), vfmaq_f32(vc2, va, vb2));
                                 vst1q_f32(c_ptr.add(j + 12), vfmaq_f32(vc3, va, vb3));
                             }
                             j += 16;
@@ -81,7 +87,9 @@ unsafe fn matmul_neon_f32(c: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usiz
                             j += 4;
                         }
                         while j < j_end {
-                            unsafe { *c_ptr.add(j) += a_val * *b_ptr.add(j); }
+                            unsafe {
+                                *c_ptr.add(j) += a_val * *b_ptr.add(j);
+                            }
                             j += 1;
                         }
                     }
@@ -95,7 +103,9 @@ unsafe fn matmul_neon_f32(c: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usiz
 fn fast_matmul_f32(a: &[f32], b: &[f32], m: usize, n: usize, k: usize) -> Vec<f32> {
     let mut c = vec![0.0f32; m * k];
     #[cfg(target_arch = "aarch64")]
-    unsafe { matmul_neon_f32(&mut c, a, b, m, n, k); }
+    unsafe {
+        matmul_neon_f32(&mut c, a, b, m, n, k);
+    }
     #[cfg(not(target_arch = "aarch64"))]
     matmul_scalar_f32(&mut c, a, b, m, n, k);
     c
@@ -195,12 +205,9 @@ fn run_one_node(
             }
             input_buffers[0].clone()
         }
-        Op::Sum { axes, keep_dims } => run_sum(
-            &input_buffers[0],
-            &input_shapes[0],
-            axes,
-            *keep_dims,
-        )?,
+        Op::Sum { axes, keep_dims } => {
+            run_sum(&input_buffers[0], &input_shapes[0], axes, *keep_dims)?
+        }
         Op::Reshape { shape } => {
             if node.inputs.len() != 1 {
                 return Err(super::RuntimeError::Execution(
@@ -234,12 +241,7 @@ fn strides_for_shape(shape: &[usize]) -> Vec<usize> {
     strides
 }
 
-fn run_sum(
-    data: &[f32],
-    in_shape: &[usize],
-    axes: &[usize],
-    keep_dims: bool,
-) -> Result<Vec<f32>> {
+fn run_sum(data: &[f32], in_shape: &[usize], axes: &[usize], keep_dims: bool) -> Result<Vec<f32>> {
     let ndim = in_shape.len();
     for &ax in axes {
         if ax >= ndim {
@@ -455,7 +457,7 @@ pub fn execute_graph_parallel(
     }
 
     for level in graph.parallel_levels() {
-        let level_results: Result<Vec<(NodeId, Vec<f32>)>> = std::thread::scope(|scope| {
+        let level_results: Result<Vec<(NodeId, Vec<f32>)>> = thread::scope(|scope| {
             let mut handles = Vec::with_capacity(level.len());
             for &node_id in level.iter() {
                 let node = graph
@@ -472,7 +474,10 @@ pub fn execute_graph_parallel(
                     .iter()
                     .map(|r| shapes[buffer_index(input_count, *r)].clone())
                     .collect();
-                let handle = scope.spawn(move || run_one_node(&node, &input_buffers, &input_shapes_for_node).map(|r| (node_id, r)));
+                let handle = scope.spawn(move || {
+                    run_one_node(&node, &input_buffers, &input_shapes_for_node)
+                        .map(|r| (node_id, r))
+                });
                 handles.push(handle);
             }
             let mut out = Vec::with_capacity(handles.len());
@@ -523,10 +528,8 @@ mod tests {
             )
             .unwrap();
 
-        let input_data: Vec<Vec<f32>> = vec![
-            vec![1.0, 2.0, 3.0, 4.0],
-            vec![10.0, 20.0, 30.0, 40.0],
-        ];
+        let input_data: Vec<Vec<f32>> =
+            vec![vec![1.0, 2.0, 3.0, 4.0], vec![10.0, 20.0, 30.0, 40.0]];
         let input_shapes: Vec<Vec<usize>> = vec![vec![2, 2], vec![2, 2]];
 
         let outputs = execute_graph(&graph, &input_data, &input_shapes).unwrap();
@@ -538,8 +541,7 @@ mod tests {
     #[test]
     fn execute_graph_sum_reduce_last_axis() {
         let mut graph = Graph::new();
-        let a = graph
-            .add_input(vec![2, 3], DTypeId::F32);
+        let a = graph.add_input(vec![2, 3], DTypeId::F32);
         let _sum = graph
             .add_node(
                 Op::Sum {
@@ -566,16 +568,27 @@ mod tests {
         let a = graph.add_input(vec![2, 2], DTypeId::F32);
         let b = graph.add_input(vec![2, 2], DTypeId::F32);
         let c = graph
-            .add_node(Op::Add, vec![a, b], TensorDesc { shape: vec![2, 2], dtype_id: DTypeId::F32 })
+            .add_node(
+                Op::Add,
+                vec![a, b],
+                TensorDesc {
+                    shape: vec![2, 2],
+                    dtype_id: DTypeId::F32,
+                },
+            )
             .unwrap();
         let _d = graph
             .add_node(
                 Op::Mul,
                 vec![TensorRef::Node(c), b],
-                TensorDesc { shape: vec![2, 2], dtype_id: DTypeId::F32 },
+                TensorDesc {
+                    shape: vec![2, 2],
+                    dtype_id: DTypeId::F32,
+                },
             )
             .unwrap();
-        let input_data: Vec<Vec<f32>> = vec![vec![1.0, 2.0, 3.0, 4.0], vec![10.0, 20.0, 30.0, 40.0]];
+        let input_data: Vec<Vec<f32>> =
+            vec![vec![1.0, 2.0, 3.0, 4.0], vec![10.0, 20.0, 30.0, 40.0]];
         let input_shapes: Vec<Vec<usize>> = vec![vec![2, 2], vec![2, 2]];
         let seq = execute_graph(&graph, &input_data, &input_shapes).unwrap();
         let par = execute_graph_parallel(&graph, &input_data, &input_shapes).unwrap();

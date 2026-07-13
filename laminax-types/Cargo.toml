@@ -3,7 +3,9 @@ name = "laminax-types"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 numina = { path = "../../numina" }
 laminax-dag = { path = "../laminax-dag" }
-

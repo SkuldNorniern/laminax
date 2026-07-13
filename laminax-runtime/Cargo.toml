@@ -3,6 +3,9 @@ name = "laminax-runtime"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [features]
 # HIP (ROCm) + Vulkan backends. CUDA is intentionally omitted: zengpu-cuda emits
 # `-lnvrtc -lcuda` link flags that break binaries on non-NVIDIA hosts. Re-add

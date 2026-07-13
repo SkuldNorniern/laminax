@@ -20,13 +20,8 @@ pub enum Op {
     Mul,
     Div,
     MatMul,
-    Sum {
-        axes: Vec<usize>,
-        keep_dims: bool,
-    },
-    Reshape {
-        shape: Vec<usize>,
-    },
+    Sum { axes: Vec<usize>, keep_dims: bool },
+    Reshape { shape: Vec<usize> },
     Copy,
 }
 

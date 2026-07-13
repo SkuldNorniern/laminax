@@ -5,17 +5,17 @@
 //! [`TensorStorage`] backends; [`Tensor`] implements [`NdArray`] for Numina ops (add, mul, sum).
 //! Use [`Tensor::from_slice`] with types that implement Numina's [`TensorElement`].
 
-use std::fmt;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{fmt, mem, ptr, slice};
 // numina 0.0.2 names its element trait `DTypeElement`; keep the local `TensorElement`
 // spelling used throughout this module.
 use numina::DTypeElement as TensorElement;
 use numina::{add as numina_add, mul as numina_mul};
-use numina::{sum as numina_sum, mean as numina_mean};
 use numina::{exp as numina_exp, log as numina_log, sqrt as numina_sqrt};
+use numina::{mean as numina_mean, sum as numina_sum};
 
 // Re-export types that are part of the laminax-types API
-pub use numina::{BFloat16, QuantizedU8, QuantizedI4};
+pub use numina::{BFloat16, QuantizedI4, QuantizedU8};
 
 /// Build a 1-D numina array from `f64` values for a floating dtype.
 ///
@@ -40,7 +40,7 @@ fn ndarray_1d_from_f64(dtype: DType, vals: &[f64]) -> Result<Box<dyn NdArray>, S
 }
 
 /// Backend storage for tensor data. Implement this (or use [`CpuStorage`]) instead of Numina's NdArray.
-pub trait TensorStorage: Send + Sync + std::fmt::Debug {
+pub trait TensorStorage: Send + Sync + fmt::Debug {
     fn shape(&self) -> &Shape;
     fn strides(&self) -> &Strides;
     fn len(&self) -> usize;
@@ -75,7 +75,12 @@ impl CpuStorage {
     pub fn new(data: Vec<u8>, shape: Shape, dtype: DType) -> Self {
         let strides = Strides::from_shape(&shape);
         assert_eq!(data.len(), shape.len() * dtype.dtype_size_bytes());
-        Self { data, shape, strides, dtype }
+        Self {
+            data,
+            shape,
+            strides,
+            dtype,
+        }
     }
 
     /// Like `np.zeros`: delegate to Numina's array creation so all dtypes are consistent.
@@ -142,7 +147,11 @@ impl TensorStorage for CpuStorage {
     }
     fn reshape(&self, new_shape: Shape) -> Result<Box<dyn TensorStorage>, String> {
         if new_shape.len() != self.shape.len() {
-            return Err(format!("reshape: size {} != {}", new_shape.len(), self.shape.len()));
+            return Err(format!(
+                "reshape: size {} != {}",
+                new_shape.len(),
+                self.shape.len()
+            ));
         }
         let strides = Strides::from_shape(&new_shape);
         Ok(Box::new(Self {
@@ -241,10 +250,9 @@ impl Tensor {
         // `T: TensorElement` (= numina `DTypeElement: DTypeLike`) carries its dtype as a const,
         // and is `Copy` with a layout matching that dtype, so the raw bytes are a direct view.
         let dtype = <T as numina::DTypeLike>::DTYPE;
-        let bytes = unsafe {
-            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
-        }
-        .to_vec();
+        let bytes =
+            unsafe { slice::from_raw_parts(data.as_ptr() as *const u8, mem::size_of_val(data)) }
+                .to_vec();
         Self::new(bytes, shape, dtype, backend_factory)
     }
 
@@ -343,7 +351,10 @@ impl Tensor {
     /// This is a convenience method for small tensors - not efficient for large ones
     pub fn to_vec_f32(&self) -> Result<Vec<f32>, String> {
         if self.dtype() != crate::F32 {
-            return Err(format!("to_vec_f32 only supported for F32 tensors, got {:?}", self.dtype()));
+            return Err(format!(
+                "to_vec_f32 only supported for F32 tensors, got {:?}",
+                self.dtype()
+            ));
         }
 
         let byte_len = self.len() * 4; // f32 = 4 bytes
@@ -354,11 +365,7 @@ impl Tensor {
         let mut result = vec![0.0f32; self.len()];
         unsafe {
             let bytes = self.storage.as_bytes();
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                result.as_mut_ptr() as *mut u8,
-                byte_len,
-            );
+            ptr::copy_nonoverlapping(bytes.as_ptr(), result.as_mut_ptr() as *mut u8, byte_len);
         }
         Ok(result)
     }
@@ -367,17 +374,24 @@ impl Tensor {
     /// This is a temporary method until proper tensor mutation API is implemented
     pub fn set_from_f32_slice(&mut self, data: &[f32]) -> Result<(), String> {
         if self.dtype() != crate::F32 {
-            return Err(format!("set_from_f32_slice only supported for F32 tensors, got {:?}", self.dtype()));
+            return Err(format!(
+                "set_from_f32_slice only supported for F32 tensors, got {:?}",
+                self.dtype()
+            ));
         }
 
         if data.len() != self.len() {
-            return Err(format!("Data length {} does not match tensor length {}", data.len(), self.len()));
+            return Err(format!(
+                "Data length {} does not match tensor length {}",
+                data.len(),
+                self.len()
+            ));
         }
 
         let byte_len = data.len() * 4; // f32 = 4 bytes
         unsafe {
             let dest_bytes = self.storage.as_mut_bytes();
-            std::ptr::copy_nonoverlapping(
+            ptr::copy_nonoverlapping(
                 data.as_ptr() as *const u8,
                 dest_bytes.as_mut_ptr(),
                 byte_len,
@@ -483,8 +497,8 @@ impl Tensor {
 /// Exposes [`TensorStorage`] as Numina's [`NdArray`] so results can be used with Numina ops.
 struct StorageAsNdArray(Box<dyn TensorStorage>);
 
-impl std::fmt::Debug for StorageAsNdArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for StorageAsNdArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "StorageAsNdArray")
     }
 }
@@ -515,19 +529,29 @@ impl NdArray for StorageAsNdArray {
         Box::new(StorageAsNdArray(self.0.clone_storage()))
     }
     fn reshape(&self, new_shape: Shape) -> Result<Box<dyn NdArray>, String> {
-        self.0.reshape(new_shape).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.0
+            .reshape(new_shape)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn transpose(&self) -> Result<Box<dyn NdArray>, String> {
-        self.0.transpose().map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.0
+            .transpose()
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn zeros(&self, shape: Shape) -> Result<Box<dyn NdArray>, String> {
-        self.0.zeros(shape).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.0
+            .zeros(shape)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn ones(&self, shape: Shape) -> Result<Box<dyn NdArray>, String> {
-        self.0.ones(shape).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.0
+            .ones(shape)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn new_array(&self, shape: Shape, dtype: DType) -> Result<Box<dyn NdArray>, String> {
-        self.0.new_array(shape, dtype).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.0
+            .new_array(shape, dtype)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
 }
 
@@ -554,19 +578,29 @@ impl NdArray for Tensor {
         Box::new(StorageAsNdArray(self.storage.clone_storage()))
     }
     fn reshape(&self, new_shape: Shape) -> Result<Box<dyn NdArray>, String> {
-        self.storage.reshape(new_shape).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.storage
+            .reshape(new_shape)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn transpose(&self) -> Result<Box<dyn NdArray>, String> {
-        self.storage.transpose().map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.storage
+            .transpose()
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn zeros(&self, shape: Shape) -> Result<Box<dyn NdArray>, String> {
-        self.storage.zeros(shape).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.storage
+            .zeros(shape)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn ones(&self, shape: Shape) -> Result<Box<dyn NdArray>, String> {
-        self.storage.ones(shape).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.storage
+            .ones(shape)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
     fn new_array(&self, shape: Shape, dtype: DType) -> Result<Box<dyn NdArray>, String> {
-        self.storage.new_array(shape, dtype).map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
+        self.storage
+            .new_array(shape, dtype)
+            .map(|s| Box::new(StorageAsNdArray(s)) as Box<dyn NdArray>)
     }
 }
 
@@ -686,7 +720,6 @@ mod tests {
         assert_eq!(new_tensor.shape(), &Shape::from([3, 4]));
         assert_eq!(new_tensor.dtype(), numina::I32);
     }
-
 
     #[test]
     fn tensor_with_factory_backend() {

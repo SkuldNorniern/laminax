@@ -3,6 +3,11 @@
 //! Built on the generic [`laminax_dag::Dag`]; nodes use shared [`Node`], [`Op`], [`TensorDesc`]
 //! from laminax-types so the same graph shape can be consumed by Laminax runtime and Cetana.
 
+use std::{
+    error::Error,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
+
 use laminax_dag::{Dag, DagError, Ref};
 use laminax_types::DTypeId;
 
@@ -23,7 +28,10 @@ impl From<DagError> for GraphError {
     fn from(e: DagError) -> Self {
         match e {
             DagError::Cycle => GraphError::DagCycle,
-            DagError::InvalidRef { node_id, input_index } => GraphError::DagInvalidRef {
+            DagError::InvalidRef {
+                node_id,
+                input_index,
+            } => GraphError::DagInvalidRef {
                 node_id,
                 input_index,
             },
@@ -31,18 +39,25 @@ impl From<DagError> for GraphError {
     }
 }
 
-impl std::fmt::Display for GraphError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for GraphError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             GraphError::DagCycle => write!(f, "graph contains a cycle"),
-            GraphError::DagInvalidRef { node_id, input_index } => {
-                write!(f, "node {} has invalid input ref at index {}", node_id, input_index)
+            GraphError::DagInvalidRef {
+                node_id,
+                input_index,
+            } => {
+                write!(
+                    f,
+                    "node {} has invalid input ref at index {}",
+                    node_id, input_index
+                )
             }
         }
     }
 }
 
-impl std::error::Error for GraphError {}
+impl Error for GraphError {}
 
 pub type GraphResult<T> = Result<T, GraphError>;
 
@@ -68,7 +83,9 @@ impl Graph {
         inputs: Vec<TensorRef>,
         output: TensorDesc,
     ) -> GraphResult<NodeId> {
-        self.0.add_node(Node { op, inputs, output }).map_err(Into::into)
+        self.0
+            .add_node(Node { op, inputs, output })
+            .map_err(Into::into)
     }
 
     /// Returns the node for the given id, or `None` if out of range.
@@ -111,22 +128,26 @@ mod tests {
         let mut g = Graph::new();
         let a = g.add_input(vec![2, 2], DTypeId::F32);
         let b = g.add_input(vec![2, 2], DTypeId::F32);
-        let c = g.add_node(
-            Op::Add,
-            vec![a, b],
-            TensorDesc {
-                shape: vec![2, 2],
-                dtype_id: DTypeId::F32,
-            },
-        ).unwrap();
-        let _d = g.add_node(
-            Op::Mul,
-            vec![TensorRef::Node(c), b],
-            TensorDesc {
-                shape: vec![2, 2],
-                dtype_id: DTypeId::F32,
-            },
-        ).unwrap();
+        let c = g
+            .add_node(
+                Op::Add,
+                vec![a, b],
+                TensorDesc {
+                    shape: vec![2, 2],
+                    dtype_id: DTypeId::F32,
+                },
+            )
+            .unwrap();
+        let _d = g
+            .add_node(
+                Op::Mul,
+                vec![TensorRef::Node(c), b],
+                TensorDesc {
+                    shape: vec![2, 2],
+                    dtype_id: DTypeId::F32,
+                },
+            )
+            .unwrap();
         assert_eq!(g.input_count(), 2);
         assert_eq!(g.nodes().len(), 2);
         assert!(!g.has_cycle());
@@ -140,16 +161,21 @@ mod tests {
     fn graph_invalid_ref_rejected() {
         let mut g = Graph::new();
         let _ = g.add_input(vec![2], DTypeId::F32);
-        let err = g.add_node(
-            Op::Copy,
-            vec![TensorRef::Node(NodeId(0))],
-            TensorDesc {
-                shape: vec![2],
-                dtype_id: DTypeId::F32,
-            },
-        ).unwrap_err();
+        let err = g
+            .add_node(
+                Op::Copy,
+                vec![TensorRef::Node(NodeId(0))],
+                TensorDesc {
+                    shape: vec![2],
+                    dtype_id: DTypeId::F32,
+                },
+            )
+            .unwrap_err();
         match err {
-            GraphError::DagInvalidRef { node_id: 0, input_index: 0 } => {}
+            GraphError::DagInvalidRef {
+                node_id: 0,
+                input_index: 0,
+            } => {}
             _ => panic!("expected DagInvalidRef"),
         }
     }
@@ -160,13 +186,36 @@ mod tests {
         let a = g.add_input(vec![4], DTypeId::F32);
         let b = g.add_input(vec![4], DTypeId::F32);
         let c = g.add_input(vec![4], DTypeId::F32);
-        let n0 = g.add_node(Op::Add, vec![a, b], TensorDesc { shape: vec![4], dtype_id: DTypeId::F32 }).unwrap();
-        let n1 = g.add_node(Op::Add, vec![b, c], TensorDesc { shape: vec![4], dtype_id: DTypeId::F32 }).unwrap();
-        let _n2 = g.add_node(
-            Op::Add,
-            vec![TensorRef::Node(n0), TensorRef::Node(n1)],
-            TensorDesc { shape: vec![4], dtype_id: DTypeId::F32 },
-        ).unwrap();
+        let n0 = g
+            .add_node(
+                Op::Add,
+                vec![a, b],
+                TensorDesc {
+                    shape: vec![4],
+                    dtype_id: DTypeId::F32,
+                },
+            )
+            .unwrap();
+        let n1 = g
+            .add_node(
+                Op::Add,
+                vec![b, c],
+                TensorDesc {
+                    shape: vec![4],
+                    dtype_id: DTypeId::F32,
+                },
+            )
+            .unwrap();
+        let _n2 = g
+            .add_node(
+                Op::Add,
+                vec![TensorRef::Node(n0), TensorRef::Node(n1)],
+                TensorDesc {
+                    shape: vec![4],
+                    dtype_id: DTypeId::F32,
+                },
+            )
+            .unwrap();
         let levels = g.parallel_levels();
         assert_eq!(levels.len(), 2);
         assert_eq!(levels[0].len(), 2);

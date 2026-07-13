@@ -49,4 +49,3 @@ pub trait Device: Send + Sync {
         &self.capabilities().name
     }
 }
-

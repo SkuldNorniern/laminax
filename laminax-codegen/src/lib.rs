@@ -78,13 +78,20 @@ impl std::fmt::Display for CodegenError {
             CodegenError::UnsupportedTarget(target) => write!(f, "Unsupported target: {}", target),
             CodegenError::NotImplemented(feature) => write!(f, "Not implemented: {}", feature),
             CodegenError::InvalidIr(msg) => write!(f, "Invalid IR: {}", msg),
-            CodegenError::UnsupportedType { backend, dtype, reason } => {
-                write!(f, "Unsupported type {} on backend {}: {}", dtype, backend, reason)
+            CodegenError::UnsupportedType {
+                backend,
+                dtype,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Unsupported type {} on backend {}: {}",
+                    dtype, backend, reason
+                )
             }
         }
     }
 }
-
 
 /// Target backends supported by this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,13 +143,19 @@ pub fn compile_lamina_ir(ir: &str, backend: Backend) -> std::result::Result<Vec<
 }
 
 /// Convenience: lower a `ToLaminaIr` into Lamina IR then compile for a specific backend.
-pub fn lower_and_compile<T: ToLaminaIr>(lowerable: &T, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
+pub fn lower_and_compile<T: ToLaminaIr>(
+    lowerable: &T,
+    backend: Backend,
+) -> std::result::Result<Vec<u8>, CodegenError> {
     let ir = lowerable.to_lamina_ir()?;
     compile_lamina_ir(&ir, backend)
 }
 
 /// Compile directly from LCIR kernel to backend-specific binary.
-pub fn compile_from_lcir(kernel: &laminax_lcir::Kernel, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
+pub fn compile_from_lcir(
+    kernel: &laminax_lcir::Kernel,
+    backend: Backend,
+) -> std::result::Result<Vec<u8>, CodegenError> {
     match backend {
         Backend::Cpu => {
             let backend = backends::cpu::CpuBackend::new();

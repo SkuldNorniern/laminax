@@ -3,8 +3,11 @@
 //! Provides ML-accelerated arrays for Coral TPU devices.
 //! Optimized for edge ML inference with 8-bit quantization support.
 
-use std::sync::Arc;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    sync::Arc,
+};
 
 use super::{Device, DeviceCapabilities, DeviceType};
 
@@ -20,12 +23,12 @@ impl CoralDevice {
         let capabilities = DeviceCapabilities {
             device_type: DeviceType::Coral,
             name: format!("Coral TPU {}", device_id),
-            compute_units: 1, // Single TPU core
-            max_work_group_size: 1, // TPU operations are typically batched
+            compute_units: 1,                   // Single TPU core
+            max_work_group_size: 1,             // TPU operations are typically batched
             local_memory_size: 8 * 1024 * 1024, // 8MB internal memory
-            global_memory_size: 0, // TPU doesn't have general-purpose memory
+            global_memory_size: 0,              // TPU doesn't have general-purpose memory
             supports_fp64: false,
-            supports_fp16: false, // Coral TPU is optimized for INT8
+            supports_fp16: false,  // Coral TPU is optimized for INT8
             supports_async: false, // Synchronous inference operations
             unified_memory: false,
             shared_memory: false,
@@ -61,6 +64,7 @@ impl Device for CoralDevice {
 #[derive(Debug)]
 pub struct CoralArray {
     shape: Shape,
+    strides: Strides,
     dtype: DType,
     device: Arc<CoralDevice>,
     // In real implementation:
@@ -84,6 +88,7 @@ impl CoralArray {
 
         // In real implementation: allocate EdgeTPU tensor
         Ok(Self {
+            strides: Strides::from_shape(&shape),
             shape,
             dtype,
             device,
@@ -91,7 +96,10 @@ impl CoralArray {
     }
 
     /// Load pre-compiled Coral model
-    pub fn from_compiled_model(_model_path: &str, device: Arc<CoralDevice>) -> Result<Self, String> {
+    pub fn from_compiled_model(
+        _model_path: &str,
+        device: Arc<CoralDevice>,
+    ) -> Result<Self, String> {
         // In real implementation: load EdgeTPU model and extract tensor info
         Err("Coral model loading not yet implemented".to_string())
     }
@@ -106,7 +114,7 @@ impl CoralArray {
     pub fn quantization_info(&self) -> CoralQuantizationInfo {
         CoralQuantizationInfo {
             dtype: self.dtype,
-            scale: 1.0, // Default scale
+            scale: 1.0,    // Default scale
             zero_point: 0, // Default zero point
         }
     }
@@ -126,8 +134,7 @@ impl NdArray for CoralArray {
     }
 
     fn strides(&self) -> &Strides {
-        // Coral arrays are typically stored in EdgeTPU-optimized layouts
-        unimplemented!("Coral strides not implemented - uses EdgeTPU layout")
+        &self.strides
     }
 
     fn len(&self) -> usize {
@@ -151,6 +158,7 @@ impl NdArray for CoralArray {
         // In real implementation: duplicate EdgeTPU tensor
         Box::new(Self {
             shape: self.shape.clone(),
+            strides: self.strides.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         })
@@ -181,8 +189,8 @@ impl NdArray for CoralArray {
     }
 }
 
-impl std::fmt::Display for CoralArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CoralArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "CoralArray({}, {}, device: {})",

@@ -1,7 +1,7 @@
 //! Common type mappings and conversions.
 
-use laminax::DType;
 use crate::CodegenError;
+use laminax::DType;
 
 /// Map Laminax DType to various backend type representations
 pub trait TypeMapper {
@@ -9,7 +9,11 @@ pub trait TypeMapper {
     fn map_type(&self, dtype: DType) -> std::result::Result<String, CodegenError>;
 
     /// Get vector type name for this backend
-    fn map_vector_type(&self, dtype: DType, width: usize) -> std::result::Result<String, CodegenError>;
+    fn map_vector_type(
+        &self,
+        dtype: DType,
+        width: usize,
+    ) -> std::result::Result<String, CodegenError>;
 
     /// Get pointer type name for this backend
     fn map_pointer_type(&self, dtype: DType) -> std::result::Result<String, CodegenError>;
@@ -42,7 +46,11 @@ impl TypeMapper for CTypeMapper {
         })
     }
 
-    fn map_vector_type(&self, dtype: DType, width: usize) -> std::result::Result<String, CodegenError> {
+    fn map_vector_type(
+        &self,
+        dtype: DType,
+        width: usize,
+    ) -> std::result::Result<String, CodegenError> {
         Ok(format!("{}{}", self.map_type(dtype)?, width))
     }
 
@@ -79,7 +87,11 @@ impl TypeMapper for MetalTypeMapper {
         }
     }
 
-    fn map_vector_type(&self, dtype: DType, width: usize) -> std::result::Result<String, CodegenError> {
+    fn map_vector_type(
+        &self,
+        dtype: DType,
+        width: usize,
+    ) -> std::result::Result<String, CodegenError> {
         Ok(format!("{}{}", self.map_type(dtype)?, width))
     }
 
@@ -112,7 +124,11 @@ impl TypeMapper for WgslTypeMapper {
         })
     }
 
-    fn map_vector_type(&self, dtype: DType, width: usize) -> std::result::Result<String, CodegenError> {
+    fn map_vector_type(
+        &self,
+        dtype: DType,
+        width: usize,
+    ) -> std::result::Result<String, CodegenError> {
         Ok(format!("vec{}<{}>", width, self.map_type(dtype)?))
     }
 
@@ -143,7 +159,12 @@ mod tests {
         let result = mapper.map_type(DType::BF16);
         assert!(result.is_err());
 
-        if let Err(CodegenError::UnsupportedType { backend, dtype, reason }) = result {
+        if let Err(CodegenError::UnsupportedType {
+            backend,
+            dtype,
+            reason,
+        }) = result
+        {
             assert_eq!(backend, "Metal");
             assert_eq!(dtype, DType::BF16);
             assert!(reason.contains("BF16"));
@@ -205,4 +226,3 @@ mod tests {
         assert!(metal_mapper.map_pointer_type(DType::F32).is_ok());
     }
 }
-

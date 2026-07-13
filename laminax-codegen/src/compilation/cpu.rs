@@ -23,4 +23,3 @@ impl Compiler for CpuCompiler {
         "CPU Compiler"
     }
 }
-

@@ -3,8 +3,11 @@
 //! Provides ML-accelerated arrays for Google Cloud TPU devices.
 //! Optimized for large-scale training and inference with bfloat16 support.
 
-use std::sync::Arc;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    sync::Arc,
+};
 
 use super::{Device, DeviceCapabilities, DeviceType};
 
@@ -23,14 +26,14 @@ impl TpuDevice {
             device_type: DeviceType::Tpu,
             name: format!("TPU Device {}", device_id),
             compute_units: core_count,
-            max_work_group_size: 2048, // TPU vector units
-            local_memory_size: 8 * 1024 * 1024, // 8MB per core HBM
+            max_work_group_size: 2048,                   // TPU vector units
+            local_memory_size: 8 * 1024 * 1024,          // 8MB per core HBM
             global_memory_size: 16 * 1024 * 1024 * 1024, // 16GB HBM per chip
             supports_fp64: false,
             supports_fp16: true,
             supports_async: true,
             unified_memory: false, // TPU has dedicated HBM
-            shared_memory: true,    // Shared memory between cores
+            shared_memory: true,   // Shared memory between cores
         };
 
         Ok(Self {
@@ -68,6 +71,7 @@ impl Device for TpuDevice {
 #[derive(Debug)]
 pub struct TpuArray {
     shape: Shape,
+    strides: Strides,
     dtype: DType,
     device: Arc<TpuDevice>,
     // In real implementation:
@@ -91,6 +95,7 @@ impl TpuArray {
 
         // In real implementation: allocate XLA tensor
         Ok(Self {
+            strides: Strides::from_shape(&shape),
             shape,
             dtype,
             device,
@@ -98,7 +103,12 @@ impl TpuArray {
     }
 
     /// Create TPU array with sharding configuration
-    pub fn new_sharded(shape: Shape, dtype: DType, device: Arc<TpuDevice>, _sharding_spec: &str) -> Result<Self, String> {
+    pub fn new_sharded(
+        shape: Shape,
+        dtype: DType,
+        device: Arc<TpuDevice>,
+        _sharding_spec: &str,
+    ) -> Result<Self, String> {
         let array = Self::new(shape, dtype, device)?;
         // In real implementation: apply sharding configuration
         Ok(array)
@@ -134,7 +144,7 @@ pub struct TpuShardingInfo {
 #[derive(Debug, Clone, Copy)]
 pub enum TpuShardingType {
     Replicated,
-    Split(usize), // Split along axis
+    Split(usize),   // Split along axis
     Sharded(usize), // Sharded across cores
 }
 
@@ -144,8 +154,7 @@ impl NdArray for TpuArray {
     }
 
     fn strides(&self) -> &Strides {
-        // TPU arrays use XLA layouts, not traditional strides
-        unimplemented!("TPU strides not implemented - uses XLA layout")
+        &self.strides
     }
 
     fn len(&self) -> usize {
@@ -169,6 +178,7 @@ impl NdArray for TpuArray {
         // In real implementation: duplicate XLA tensor
         Box::new(Self {
             shape: self.shape.clone(),
+            strides: self.strides.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         })
@@ -179,6 +189,7 @@ impl NdArray for TpuArray {
             return Err("Reshape must preserve element count".to_string());
         }
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -191,6 +202,7 @@ impl NdArray for TpuArray {
         }
         let new_shape = Shape::from([self.shape.dim(1), self.shape.dim(0)]);
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -214,8 +226,8 @@ impl NdArray for TpuArray {
     }
 }
 
-impl std::fmt::Display for TpuArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for TpuArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "TpuArray({}, {}, device: {})",

@@ -13,9 +13,11 @@ use crate::CodegenError;
 /// Common trait for LCIR lowering targets
 pub trait LowerToTarget {
     /// Lower LCIR kernel to target format
-    fn lower_lcir(&self, kernel: &laminax_lcir::Kernel) -> std::result::Result<String, CodegenError>;
+    fn lower_lcir(
+        &self,
+        kernel: &laminax_lcir::Kernel,
+    ) -> std::result::Result<String, CodegenError>;
 
     /// Get target format name
     fn target_name(&self) -> &'static str;
 }
-

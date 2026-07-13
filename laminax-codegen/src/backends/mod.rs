@@ -11,7 +11,6 @@ pub mod opencl;
 pub mod vulkan;
 pub mod webgpu;
 
-
 /// Backend capability flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendCapabilities {
@@ -36,4 +35,3 @@ pub trait Backend {
     /// Get backend name
     fn name(&self) -> &'static str;
 }
-

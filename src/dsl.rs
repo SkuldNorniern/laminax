@@ -3,6 +3,13 @@
 //! The DSL provides ergonomic Rust syntax for tensor/array computations
 //! that can be lowered to optimized LCIR kernels.
 
+use std::{
+    any::Any,
+    collections::HashMap,
+    fmt::{Debug, Formatter, Result as FmtResult},
+    result::Result as StdResult,
+};
+
 use crate::lcir::{BinaryOp, KernelBuilder, LoopId, MemoryScope, TensorId, UnaryOp, access, index};
 use crate::{DType, LaminaxError, NdArray, Result, Shape, Tensor};
 use laminax_types::TensorStorage;
@@ -44,24 +51,20 @@ fn test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn Te
                 dtype: self.dtype,
             })
         }
-        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
-            unimplemented!()
+        fn reshape(&self, _: Shape) -> StdResult<Box<dyn TensorStorage>, String> {
+            Err("test storage reshape is not implemented".to_string())
         }
-        fn transpose(&self) -> std::result::Result<Box<dyn TensorStorage>, String> {
-            unimplemented!()
+        fn transpose(&self) -> StdResult<Box<dyn TensorStorage>, String> {
+            Err("test storage transpose is not implemented".to_string())
         }
-        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
-            unimplemented!()
+        fn zeros(&self, _: Shape) -> StdResult<Box<dyn TensorStorage>, String> {
+            Err("test storage zeros is not implemented".to_string())
         }
-        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
-            unimplemented!()
+        fn ones(&self, _: Shape) -> StdResult<Box<dyn TensorStorage>, String> {
+            Err("test storage ones is not implemented".to_string())
         }
-        fn new_array(
-            &self,
-            _: Shape,
-            _: DType,
-        ) -> std::result::Result<Box<dyn TensorStorage>, String> {
-            unimplemented!()
+        fn new_array(&self, _: Shape, _: DType) -> StdResult<Box<dyn TensorStorage>, String> {
+            Err("test storage array creation is not implemented".to_string())
         }
     }
     let strides = Strides::from_shape(&shape);
@@ -88,7 +91,7 @@ pub trait DSLExpr {
     fn eval(&self) -> Result<Tensor>;
 
     /// Support for downcasting
-    fn as_any(&self) -> &dyn std::any::Any;
+    fn as_any(&self) -> &dyn Any;
 }
 
 /// Represents a scheduled computation ready for execution
@@ -97,8 +100,8 @@ pub struct Computation {
     schedule: Schedule,
 }
 
-impl std::fmt::Debug for Computation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Debug for Computation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         f.debug_struct("Computation")
             .field("schedule", &self.schedule)
             .field("expr", &"<DSL expression>")
@@ -197,7 +200,7 @@ impl Computation {
 
         // Extract input data from tensor expressions
         // This is a simplified implementation - in practice we'd traverse the expression tree
-        let mut inputs = std::collections::HashMap::new();
+        let mut inputs = HashMap::new();
 
         // For demo purposes, we'll add some basic input data
         // In a real implementation, this would be extracted from the actual tensor inputs
@@ -242,8 +245,8 @@ impl Computation {
 
     /// Extract test input data for demo purposes
     /// In a real implementation, this would analyze the expression tree
-    fn extract_test_input_data(&self) -> Option<std::collections::HashMap<String, Vec<u8>>> {
-        let mut inputs = std::collections::HashMap::new();
+    fn extract_test_input_data(&self) -> Option<HashMap<String, Vec<u8>>> {
+        let mut inputs = HashMap::new();
 
         // Add test data based on operation type
         // For element-wise operations (BinaryExpr)
@@ -284,7 +287,7 @@ impl Computation {
 }
 
 /// Extract raw bytes from a tensor
-fn extract_tensor_bytes(tensor: &Tensor) -> std::result::Result<Vec<u8>, ()> {
+fn extract_tensor_bytes(tensor: &Tensor) -> StdResult<Vec<u8>, ()> {
     unsafe { Ok(<Tensor as NdArray>::as_bytes(tensor).to_vec()) }
 }
 
@@ -358,7 +361,7 @@ impl DSLExpr for Tensor {
         Ok(())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
@@ -455,7 +458,7 @@ impl DSLExpr for BinaryExpr {
         }
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -526,7 +529,7 @@ impl DSLExpr for UnaryExpr {
         }
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }
@@ -610,7 +613,7 @@ impl DSLExpr for MatMulExpr {
             .map(Tensor::from_ndarray)
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 }

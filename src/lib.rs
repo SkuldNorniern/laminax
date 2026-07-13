@@ -4,6 +4,12 @@
 //! while giving fine-grained control over execution through scheduling primitives.
 //! It compiles to optimized machine code via Lamina IR for CPU and CUDA/HIP for GPU.
 
+use std::{
+    error::Error,
+    fmt::{Display, Formatter, Result as FmtResult},
+    result::Result as StdResult,
+};
+
 pub mod dsl;
 
 // Re-export everything from our foundation crates for unified API
@@ -39,8 +45,8 @@ pub enum LaminaxError {
     BackendError(String),
 }
 
-impl std::fmt::Display for LaminaxError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for LaminaxError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             LaminaxError::ShapeMismatch(msg) => write!(f, "Shape mismatch: {}", msg),
             LaminaxError::DTypeMismatch(msg) => write!(f, "Data type mismatch: {}", msg),
@@ -53,9 +59,9 @@ impl std::fmt::Display for LaminaxError {
     }
 }
 
-impl std::error::Error for LaminaxError {}
+impl Error for LaminaxError {}
 
-pub type Result<T> = std::result::Result<T, LaminaxError>;
+pub type Result<T> = StdResult<T, LaminaxError>;
 
 // Test backend factory for lib tests
 #[cfg(test)]

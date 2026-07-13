@@ -3,8 +3,11 @@
 //! Provides GPU-accelerated arrays for NVIDIA GPUs using CUDA/HIP.
 //! Features unified memory support, async operations, and optimized data transfers.
 
-use std::sync::Arc;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    sync::Arc,
+};
 
 use super::{Device, DeviceCapabilities, DeviceType};
 
@@ -64,6 +67,7 @@ impl Device for CudaDevice {
 #[derive(Debug)]
 pub struct CudaArray {
     shape: Shape,
+    strides: Strides,
     dtype: DType,
     device: Arc<CudaDevice>,
     // In real implementation:
@@ -77,6 +81,7 @@ impl CudaArray {
     pub fn new(shape: Shape, dtype: DType, device: Arc<CudaDevice>) -> Result<Self, String> {
         // In real implementation: allocate GPU memory
         Ok(Self {
+            strides: Strides::from_shape(&shape),
             shape,
             dtype,
             device,
@@ -84,7 +89,11 @@ impl CudaArray {
     }
 
     /// Create CUDA array from host data (copies to GPU)
-    pub fn from_slice<T: Copy>(data: &[T], shape: Shape, device: Arc<CudaDevice>) -> Result<Self, String> {
+    pub fn from_slice<T: Copy>(
+        data: &[T],
+        shape: Shape,
+        device: Arc<CudaDevice>,
+    ) -> Result<Self, String> {
         if data.len() != shape.len() {
             return Err("Data length doesn't match shape".to_string());
         }
@@ -125,9 +134,7 @@ impl NdArray for CudaArray {
     }
 
     fn strides(&self) -> &Strides {
-        // CUDA arrays are typically contiguous, but we could support strided access
-        // For now, return default strides
-        unimplemented!("CUDA strides not implemented - arrays assumed contiguous")
+        &self.strides
     }
 
     fn len(&self) -> usize {
@@ -152,6 +159,7 @@ impl NdArray for CudaArray {
         // In real implementation: allocate new GPU memory and copy
         Box::new(Self {
             shape: self.shape.clone(),
+            strides: self.strides.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         })
@@ -162,6 +170,7 @@ impl NdArray for CudaArray {
             return Err("Reshape must preserve element count".to_string());
         }
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -175,6 +184,7 @@ impl NdArray for CudaArray {
         }
         let new_shape = Shape::from([self.shape.dim(1), self.shape.dim(0)]);
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -198,8 +208,8 @@ impl NdArray for CudaArray {
     }
 }
 
-impl std::fmt::Display for CudaArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for CudaArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "CudaArray({}, {}, device: {})",

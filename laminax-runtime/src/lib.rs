@@ -6,6 +6,9 @@
 
 use laminax_lcir::{self as lcir, MemoryScope};
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::result::Result as StdResult;
 use std::sync::Arc;
 
 #[cfg(feature = "aot")]
@@ -24,8 +27,8 @@ pub use zen::ZenEngine;
 pub use device::CpuDevice;
 pub use execution::{Executor, KernelInstance};
 pub use graph::{ComputationGraph, Edge, ExecutionPlan, Node};
-pub use op_graph::{execute_graph, execute_graph_parallel};
 pub use memory::{Buffer, MemoryManager};
+pub use op_graph::{execute_graph, execute_graph_parallel};
 
 // Re-export device types from laminax-types
 pub use laminax_types::{Device, DeviceCapabilities, DeviceType};
@@ -40,8 +43,8 @@ pub enum RuntimeError {
     Compilation(String),
 }
 
-impl std::fmt::Display for RuntimeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for RuntimeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             RuntimeError::Device(msg) => write!(f, "Device error: {}", msg),
             RuntimeError::Memory(msg) => write!(f, "Memory error: {}", msg),
@@ -52,9 +55,9 @@ impl std::fmt::Display for RuntimeError {
     }
 }
 
-impl std::error::Error for RuntimeError {}
+impl Error for RuntimeError {}
 
-pub type Result<T> = std::result::Result<T, RuntimeError>;
+pub type Result<T> = StdResult<T, RuntimeError>;
 
 /// Main runtime context managing devices, memory, and execution
 pub struct Runtime {
@@ -194,7 +197,8 @@ mod tests {
 
         // Check the result
         let c_result = outputs.get("C").unwrap();
-        let c_values: Vec<i32> = c_result.chunks(4)
+        let c_values: Vec<i32> = c_result
+            .chunks(4)
             .map(|chunk| i32::from_le_bytes(chunk.try_into().unwrap()))
             .collect();
 

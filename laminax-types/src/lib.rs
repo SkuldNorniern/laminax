@@ -1,15 +1,15 @@
 //! Laminax Types - Tensor library powered by Numina
 
-pub mod tensor;
 pub mod array;
 pub mod device;
 pub mod graph_node;
+pub mod tensor;
 
 // Re-export core types from numina for convenience
 pub use numina::{
-    Array, CpuBytesArray, NdArray, Shape, Strides, DType, DTypeId, DTypeInfo, F32, F64, I32,
+    Array, CpuBytesArray, DType, DTypeId, DTypeInfo, F32, F64, I32, NdArray, Shape, Strides,
 };
-pub use numina::{add, mul, matmul, sum, mean, max, min, prod};
+pub use numina::{add, matmul, max, mean, min, mul, prod, sum};
 
 // Re-export Tensor and specialized types
 pub use tensor::*;

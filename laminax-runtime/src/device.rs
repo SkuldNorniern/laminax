@@ -4,8 +4,8 @@
 //! Uses device types from laminax-types.
 
 use super::Result;
-use std::sync::Arc;
-use laminax_types::{Device, DeviceType, DeviceCapabilities};
+use laminax_types::{Device, DeviceCapabilities, DeviceType};
+use std::{fs, sync::Arc, thread};
 
 /// CPU device implementation
 pub struct CpuDevice {
@@ -17,7 +17,7 @@ impl CpuDevice {
         let capabilities = DeviceCapabilities {
             device_type: DeviceType::Cpu,
             name: "CPU".to_string(),
-            compute_units: std::thread::available_parallelism()
+            compute_units: thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(1), // Fallback to 1 if unavailable
             max_work_group_size: 1024,           // Arbitrary limit for CPU
@@ -39,7 +39,7 @@ fn get_system_memory() -> usize {
     #[cfg(target_os = "linux")]
     {
         // Try reading /proc/meminfo on Linux
-        if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
+        if let Ok(contents) = fs::read_to_string("/proc/meminfo") {
             for line in contents.lines() {
                 if line.starts_with("MemTotal:") {
                     if let Some(kb_str) = line.split_whitespace().nth(1) {

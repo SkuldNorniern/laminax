@@ -350,9 +350,24 @@ mod tests {
         let mut builder = KernelBuilder::new("test_kernel");
 
         // Add tensors
-        let a_id = builder.add_tensor("A", Shape::from([4, 4]), laminax_types::F32, MemoryScope::Global);
-        let b_id = builder.add_tensor("B", Shape::from([4, 4]), laminax_types::F32, MemoryScope::Global);
-        let c_id = builder.add_tensor("C", Shape::from([4, 4]), laminax_types::F32, MemoryScope::Global);
+        let a_id = builder.add_tensor(
+            "A",
+            Shape::from([4, 4]),
+            laminax_types::F32,
+            MemoryScope::Global,
+        );
+        let b_id = builder.add_tensor(
+            "B",
+            Shape::from([4, 4]),
+            laminax_types::F32,
+            MemoryScope::Global,
+        );
+        let c_id = builder.add_tensor(
+            "C",
+            Shape::from([4, 4]),
+            laminax_types::F32,
+            MemoryScope::Global,
+        );
 
         // Add loops
         let i_loop = builder.add_loop("i", 0, 4, 1);

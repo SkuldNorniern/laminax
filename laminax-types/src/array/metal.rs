@@ -3,8 +3,12 @@
 //! Provides GPU-accelerated arrays for Apple Silicon using Metal.
 //! Features unified memory, async compute, and optimized for Apple hardware.
 
-use std::sync::Arc;
-use numina::{NdArray, Shape, Strides, DType};
+use numina::{DType, NdArray, Shape, Strides};
+use std::{
+    fmt::{Display, Formatter, Result as FmtResult},
+    sync::Arc,
+    thread,
+};
 
 use super::{Device, DeviceCapabilities, DeviceType};
 
@@ -26,9 +30,13 @@ impl MetalDevice {
             global_memory_size: {
                 // Apple Silicon typically has unified memory
                 // Use system memory as GPU memory
-                std::thread::available_parallelism()
+                thread::available_parallelism()
                     .map(|n| n.get())
-                    .unwrap_or(1) * 8 * 1024 * 1024 * 1024 // 8GB per CPU core as estimate
+                    .unwrap_or(1)
+                    * 8
+                    * 1024
+                    * 1024
+                    * 1024 // 8GB per CPU core as estimate
             },
             supports_fp64: false, // Metal doesn't support FP64
             supports_fp16: true,
@@ -66,6 +74,7 @@ impl Device for MetalDevice {
 #[derive(Debug)]
 pub struct MetalArray {
     shape: Shape,
+    strides: Strides,
     dtype: DType,
     device: Arc<MetalDevice>,
     // In real implementation:
@@ -79,6 +88,7 @@ impl MetalArray {
     pub fn new(shape: Shape, dtype: DType, device: Arc<MetalDevice>) -> Result<Self, String> {
         // In real implementation: create MTLBuffer
         Ok(Self {
+            strides: Strides::from_shape(&shape),
             shape,
             dtype,
             device,
@@ -86,7 +96,11 @@ impl MetalArray {
     }
 
     /// Create Metal array from host data
-    pub fn from_slice<T: Copy>(data: &[T], shape: Shape, device: Arc<MetalDevice>) -> Result<Self, String> {
+    pub fn from_slice<T: Copy>(
+        data: &[T],
+        shape: Shape,
+        device: Arc<MetalDevice>,
+    ) -> Result<Self, String> {
         if data.len() != shape.len() {
             return Err("Data length doesn't match shape".to_string());
         }
@@ -121,8 +135,7 @@ impl NdArray for MetalArray {
     }
 
     fn strides(&self) -> &Strides {
-        // Metal arrays are typically contiguous
-        unimplemented!("Metal strides not implemented - arrays assumed contiguous")
+        &self.strides
     }
 
     fn len(&self) -> usize {
@@ -156,6 +169,7 @@ impl NdArray for MetalArray {
         // In real implementation: create new MTLBuffer and copy
         Box::new(Self {
             shape: self.shape.clone(),
+            strides: self.strides.clone(),
             dtype: self.dtype,
             device: self.device.clone(),
         })
@@ -166,6 +180,7 @@ impl NdArray for MetalArray {
             return Err("Reshape must preserve element count".to_string());
         }
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -178,6 +193,7 @@ impl NdArray for MetalArray {
         }
         let new_shape = Shape::from([self.shape.dim(1), self.shape.dim(0)]);
         Ok(Box::new(Self {
+            strides: Strides::from_shape(&new_shape),
             shape: new_shape,
             dtype: self.dtype,
             device: self.device.clone(),
@@ -201,8 +217,8 @@ impl NdArray for MetalArray {
     }
 }
 
-impl std::fmt::Display for MetalArray {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for MetalArray {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         write!(
             f,
             "MetalArray({}, {}, device: {})",

@@ -4,6 +4,12 @@
 //! Tensor graphs (LCIR-Graph, Cetana TensorGraph) and other consumers instantiate [`Dag`] with
 //! their node type and get [`topological_order`](Dag::topological_order), [`parallel_levels`](Dag::parallel_levels), and cycle detection.
 
+use std::{
+    collections::VecDeque,
+    error::Error,
+    fmt::{Display, Formatter, Result as FmtResult},
+};
+
 /// Identifies a node (index into the nodes vector).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
@@ -32,18 +38,25 @@ pub enum DagError {
     InvalidRef { node_id: usize, input_index: usize },
 }
 
-impl std::fmt::Display for DagError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DagError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             DagError::Cycle => write!(f, "graph contains a cycle"),
-            DagError::InvalidRef { node_id, input_index } => {
-                write!(f, "node {} has invalid input ref at index {}", node_id, input_index)
+            DagError::InvalidRef {
+                node_id,
+                input_index,
+            } => {
+                write!(
+                    f,
+                    "node {} has invalid input ref at index {}",
+                    node_id, input_index
+                )
             }
         }
     }
 }
 
-impl std::error::Error for DagError {}
+impl Error for DagError {}
 
 pub type DagResult<T> = Result<T, DagError>;
 
@@ -131,7 +144,7 @@ impl<N: NodeLike> Dag<N> {
             }
         }
 
-        let mut queue = std::collections::VecDeque::new();
+        let mut queue = VecDeque::new();
         for (i, &d) in in_degree.iter().enumerate() {
             if d == 0 {
                 queue.push_back(i);
@@ -193,12 +206,12 @@ mod tests {
         let mut g: Dag<TestNode> = Dag::new();
         let a = g.add_input();
         let b = g.add_input();
-        let c = g.add_node(TestNode {
-            inputs: vec![a, b],
-        }).unwrap();
-        let _d = g.add_node(TestNode {
-            inputs: vec![Ref::Node(c), b],
-        }).unwrap();
+        let c = g.add_node(TestNode { inputs: vec![a, b] }).unwrap();
+        let _d = g
+            .add_node(TestNode {
+                inputs: vec![Ref::Node(c), b],
+            })
+            .unwrap();
         assert_eq!(g.input_count, 2);
         assert_eq!(g.nodes.len(), 2);
         assert!(!g.has_cycle());
@@ -226,9 +239,11 @@ mod tests {
         let c = g.add_input();
         let n0 = g.add_node(TestNode { inputs: vec![a, b] }).unwrap();
         let n1 = g.add_node(TestNode { inputs: vec![b, c] }).unwrap();
-        let _n2 = g.add_node(TestNode {
-            inputs: vec![Ref::Node(n0), Ref::Node(n1)],
-        }).unwrap();
+        let _n2 = g
+            .add_node(TestNode {
+                inputs: vec![Ref::Node(n0), Ref::Node(n1)],
+            })
+            .unwrap();
         let levels = g.parallel_levels();
         assert_eq!(levels.len(), 2);
         assert_eq!(levels[0].len(), 2);

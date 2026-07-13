@@ -8,20 +8,20 @@
 //! Each backend provides different capabilities, memory models, and performance characteristics.
 //! The `NdArray` trait ensures unified interface across all backends.
 
-pub mod gpu;
-pub mod tpu;
 pub mod coral;
-pub mod rocm;
-pub mod metal;
 pub mod cuda;
+pub mod gpu;
+pub mod metal;
+pub mod rocm;
+pub mod tpu;
 
 // Re-export common array types
-pub use gpu::{GpuArray, GpuDevice};
-pub use tpu::{TpuArray, TpuDevice};
 pub use coral::{CoralArray, CoralDevice};
-pub use rocm::{RocmArray, RocmDevice};
-pub use metal::{MetalArray, MetalDevice};
 pub use cuda::{CudaArray, CudaDevice};
+pub use gpu::{GpuArray, GpuDevice};
+pub use metal::{MetalArray, MetalDevice};
+pub use rocm::{RocmArray, RocmDevice};
+pub use tpu::{TpuArray, TpuDevice};
 
 // Re-export device types from the device module
-pub use crate::device::{Device, DeviceType, DeviceCapabilities};
+pub use crate::device::{Device, DeviceCapabilities, DeviceType};

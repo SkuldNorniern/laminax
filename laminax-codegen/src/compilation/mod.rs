@@ -8,7 +8,6 @@ pub mod cuda;
 pub mod metal;
 pub mod shader;
 
-
 /// Common trait for compilation targets
 pub trait Compiler {
     /// Compile source code to binary artifact
@@ -17,4 +16,3 @@ pub trait Compiler {
     /// Get compiler name
     fn name(&self) -> &'static str;
 }
-
