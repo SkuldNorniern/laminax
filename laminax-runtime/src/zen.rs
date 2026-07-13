@@ -47,6 +47,31 @@ const SGEMM: ZslShader = zsl!(
     }
 );
 
+const BGEMM: ZslShader = zsl!(
+    push P { m: u32, n: u32, k: u32 }
+    @workgroup_size(16, 16)
+    kernel bgemm(
+        id: global_id,
+        a: device buffer<f32>,
+        b: device buffer<f32>,
+        c: device mut buffer<f32>,
+        p: P,
+    ) {
+        let row = id.y
+        let col = id.x
+        let batch = id.z
+        if row < p.m && col < p.n {
+            let ao = batch * p.m * p.k
+            let bo = batch * p.k * p.n
+            let sum: f32 = 0.0
+            for i in 0..p.k {
+                sum = sum + a[ao + row * p.k + i] * b[bo + i * p.n + col]
+            }
+            c[batch * p.m * p.n + row * p.n + col] = sum
+        }
+    }
+);
+
 const ADD: ZslShader = zsl!(
     push P { n: u32 }
     @workgroup_size(256)
@@ -194,8 +219,11 @@ pub struct ZenEngine {
     instance: Instance,
     backend: BackendPreference,
     device_name: String,
-    /// Kernel cache keyed by entry-point name. Compiling a shader goes through
-    /// hiprtc/naga per call otherwise — orders of magnitude slower than the kernel itself.
+    /// Kernel cache keyed by a caller-supplied kernel name. The backend entry-point
+    /// name cannot be the key: ZSL emits every HIP kernel as `zsl_kernel`, so keying
+    /// on it would silently hand one kernel's pipeline to another. Compiling a shader
+    /// goes through hiprtc/naga per call otherwise — orders of magnitude slower than
+    /// the kernel itself.
     pipelines: Mutex<HashMap<&'static str, CachedPipeline>>,
     /// Free-list of device buffers keyed by element count; avoids alloc/free per op.
     pool: Mutex<HashMap<usize, Vec<zengpu::BufferHandle>>>,
@@ -259,12 +287,17 @@ impl ZenEngine {
         }
     }
 
-    /// Compiled pipeline for `shader`, building and caching it on first use.
-    fn pipeline_for(&self, shader: &ZslShader, block: [u32; 3]) -> Result<zengpu::PipelineHandle> {
-        let (desc, entry) = self.pick(shader);
-        if let Some(cached) = self.pipelines.lock().unwrap().get(entry) {
+    /// Compiled pipeline for `shader`, building and caching it under `name` on first use.
+    fn pipeline_for(
+        &self,
+        shader: &ZslShader,
+        name: &'static str,
+        block: [u32; 3],
+    ) -> Result<zengpu::PipelineHandle> {
+        if let Some(cached) = self.pipelines.lock().unwrap().get(name) {
             return Ok(cached.pipeline);
         }
+        let (desc, entry) = self.pick(shader);
         let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
         let pipeline = self
             .device
@@ -273,7 +306,7 @@ impl ZenEngine {
         self.pipelines
             .lock()
             .unwrap()
-            .insert(entry, CachedPipeline { shader: sh, pipeline });
+            .insert(name, CachedPipeline { shader: sh, pipeline });
         Ok(pipeline)
     }
 
@@ -293,6 +326,7 @@ impl ZenEngine {
         a: &[f32],
         b: &[f32],
         shader: &ZslShader,
+        name: &'static str,
         extra_scalars: &[Scalar],
     ) -> Result<Vec<f32>> {
         let n = a.len();
@@ -300,7 +334,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(shader, [256, 1, 1])?;
+        let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
 
         let mut scalars = vec![Scalar::U32(n as u32)];
         scalars.extend_from_slice(extra_scalars);
@@ -325,13 +359,14 @@ impl ZenEngine {
         &self,
         a: &[f32],
         shader: &ZslShader,
+        name: &'static str,
         extra_scalars: &[Scalar],
     ) -> Result<Vec<f32>> {
         let n = a.len();
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(shader, [256, 1, 1])?;
+        let pipeline = self.pipeline_for(shader, name, [256, 1, 1])?;
 
         let mut scalars = vec![Scalar::U32(n as u32)];
         scalars.extend_from_slice(extra_scalars);
@@ -352,35 +387,35 @@ impl ZenEngine {
     }
 
     pub fn add(&self, a: &[f32], b: &[f32]) -> Result<Vec<f32>> {
-        self.run_binary(a, b, &ADD, &[])
+        self.run_binary(a, b, &ADD, "add", &[])
     }
 
     pub fn sub(&self, a: &[f32], b: &[f32]) -> Result<Vec<f32>> {
-        self.run_binary(a, b, &SUB, &[])
+        self.run_binary(a, b, &SUB, "sub", &[])
     }
 
     pub fn mul(&self, a: &[f32], b: &[f32]) -> Result<Vec<f32>> {
-        self.run_binary(a, b, &MUL, &[])
+        self.run_binary(a, b, &MUL, "mul", &[])
     }
 
     pub fn div(&self, a: &[f32], b: &[f32]) -> Result<Vec<f32>> {
-        self.run_binary(a, b, &DIV, &[])
+        self.run_binary(a, b, &DIV, "div", &[])
     }
 
     pub fn exp(&self, a: &[f32]) -> Result<Vec<f32>> {
-        self.run_unary(a, &EXP, &[])
+        self.run_unary(a, &EXP, "exp", &[])
     }
 
     pub fn log(&self, a: &[f32]) -> Result<Vec<f32>> {
-        self.run_unary(a, &LOG, &[])
+        self.run_unary(a, &LOG, "log", &[])
     }
 
     pub fn sqrt(&self, a: &[f32]) -> Result<Vec<f32>> {
-        self.run_unary(a, &SQRT, &[])
+        self.run_unary(a, &SQRT, "sqrt", &[])
     }
 
     pub fn pow(&self, a: &[f32], power: f32) -> Result<Vec<f32>> {
-        self.run_unary(a, &POW, &[Scalar::F32(power)])
+        self.run_unary(a, &POW, "pow", &[Scalar::F32(power)])
     }
 
     pub fn matmul(&self, a: &[f32], b: &[f32], m: usize, n: usize, k: usize) -> Result<Vec<f32>> {
@@ -388,7 +423,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(m * n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(&SGEMM, [16, 16, 1])?;
+        let pipeline = self.pipeline_for(&SGEMM, "sgemm", [16, 16, 1])?;
 
         let bindings = Bindings {
             buffers:  &[ba.index(), bb.index(), bc.index()],
@@ -403,6 +438,39 @@ impl ZenEngine {
         self.recycle(ba, a.len());
         self.recycle(bb, b.len());
         self.recycle(bc, m * n);
+        Ok(out)
+    }
+
+    /// Batched GEMM: `batch` back-to-back `[m,k] @ [k,n]` products in one dispatch
+    /// (grid z = batch index). `a` is `batch*m*k` elements, `b` is `batch*k*n`.
+    pub fn matmul_batched(
+        &self,
+        a: &[f32],
+        b: &[f32],
+        batch: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<Vec<f32>> {
+        let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
+        let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
+        let bc = self.alloc(batch * m * n).map_err(|e| err(e.to_string()))?;
+
+        let pipeline = self.pipeline_for(&BGEMM, "bgemm", [16, 16, 1])?;
+
+        let bindings = Bindings {
+            buffers:  &[ba.index(), bb.index(), bc.index()],
+            textures: &[],
+            scalars:  &[Scalar::U32(m as u32), Scalar::U32(n as u32), Scalar::U32(k as u32)],
+        };
+        let grid = [(n as u32 + 15) / 16, (m as u32 + 15) / 16, batch as u32];
+        self.device.dispatch(pipeline, bindings, grid).map_err(|e| err(e.to_string()))?;
+
+        let out = self.download(bc, batch * m * n).map_err(|e| err(e.to_string()))?;
+
+        self.recycle(ba, a.len());
+        self.recycle(bb, b.len());
+        self.recycle(bc, batch * m * n);
         Ok(out)
     }
 
