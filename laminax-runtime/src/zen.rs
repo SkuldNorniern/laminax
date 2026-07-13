@@ -1,6 +1,7 @@
 #![cfg(feature = "gpu")]
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use zengpu::{
     BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice,
@@ -178,12 +179,26 @@ const POW: ZslShader = zsl!(
     }
 );
 
+/// A compiled kernel kept alive for the engine's lifetime.
+struct CachedPipeline {
+    shader: zengpu::ShaderHandle,
+    pipeline: zengpu::PipelineHandle,
+}
+
+/// Max recycled buffers kept per size bucket.
+const POOL_BUCKET_CAP: usize = 32;
+
 pub struct ZenEngine {
     device: Arc<dyn GpuDevice>,
     #[allow(dead_code)]
     instance: Instance,
     backend: BackendPreference,
     device_name: String,
+    /// Kernel cache keyed by entry-point name. Compiling a shader goes through
+    /// hiprtc/naga per call otherwise — orders of magnitude slower than the kernel itself.
+    pipelines: Mutex<HashMap<&'static str, CachedPipeline>>,
+    /// Free-list of device buffers keyed by element count; avoids alloc/free per op.
+    pool: Mutex<HashMap<usize, Vec<zengpu::BufferHandle>>>,
 }
 
 impl ZenEngine {
@@ -198,7 +213,14 @@ impl ZenEngine {
         let device: Arc<dyn GpuDevice> =
             Arc::from(adapters[0].open(zengpu::DeviceRequest::default())
                 .map_err(|e| err(format!("open device: {e}")))?);
-        Ok(Self { device, instance, backend, device_name })
+        Ok(Self {
+            device,
+            instance,
+            backend,
+            device_name,
+            pipelines: Mutex::new(HashMap::new()),
+            pool: Mutex::new(HashMap::new()),
+        })
     }
 
     pub fn device_name(&self) -> String {
@@ -213,12 +235,46 @@ impl ZenEngine {
         shader.for_backend(self.backend)
     }
 
+    /// Take a pooled `n`-element buffer or create one. Callers must return it
+    /// with [`Self::recycle`] instead of destroying it.
     fn alloc(&self, n: usize) -> zengpu::Result<zengpu::BufferHandle> {
+        if let Some(buf) = self.pool.lock().unwrap().get_mut(&n).and_then(Vec::pop) {
+            return Ok(buf);
+        }
         self.device.create_buffer(BufferDesc {
             size: (n * 4) as u64,
             usage: BufferUsage::STORAGE | BufferUsage::READBACK,
             memory: MemoryUsage::GpuOnly,
         })
+    }
+
+    fn recycle(&self, buf: zengpu::BufferHandle, n: usize) {
+        let mut pool = self.pool.lock().unwrap();
+        let bucket = pool.entry(n).or_default();
+        if bucket.len() < POOL_BUCKET_CAP {
+            bucket.push(buf);
+        } else {
+            drop(pool);
+            self.device.destroy_buffer(buf);
+        }
+    }
+
+    /// Compiled pipeline for `shader`, building and caching it on first use.
+    fn pipeline_for(&self, shader: &ZslShader, block: [u32; 3]) -> Result<zengpu::PipelineHandle> {
+        let (desc, entry) = self.pick(shader);
+        if let Some(cached) = self.pipelines.lock().unwrap().get(entry) {
+            return Ok(cached.pipeline);
+        }
+        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
+        let pipeline = self
+            .device
+            .create_compute_pipeline(ComputePipelineDesc { shader: sh, entry, block })
+            .map_err(|e| err(e.to_string()))?;
+        self.pipelines
+            .lock()
+            .unwrap()
+            .insert(entry, CachedPipeline { shader: sh, pipeline });
+        Ok(pipeline)
     }
 
     fn upload(&self, data: &[f32]) -> zengpu::Result<zengpu::BufferHandle> {
@@ -244,11 +300,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let (desc, entry) = self.pick(shader);
-        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
-        let pipeline = self.device.create_compute_pipeline(ComputePipelineDesc {
-            shader: sh, entry, block: [256, 1, 1],
-        }).map_err(|e| err(e.to_string()))?;
+        let pipeline = self.pipeline_for(shader, [256, 1, 1])?;
 
         let mut scalars = vec![Scalar::U32(n as u32)];
         scalars.extend_from_slice(extra_scalars);
@@ -263,11 +315,9 @@ impl ZenEngine {
 
         let out = self.download(bc, n).map_err(|e| err(e.to_string()))?;
 
-        self.device.destroy_pipeline(pipeline);
-        self.device.destroy_shader(sh);
-        self.device.destroy_buffer(ba);
-        self.device.destroy_buffer(bb);
-        self.device.destroy_buffer(bc);
+        self.recycle(ba, n);
+        self.recycle(bb, n);
+        self.recycle(bc, n);
         Ok(out)
     }
 
@@ -281,11 +331,7 @@ impl ZenEngine {
         let ba = self.upload(a).map_err(|e| err(e.to_string()))?;
         let bb = self.alloc(n).map_err(|e| err(e.to_string()))?;
 
-        let (desc, entry) = self.pick(shader);
-        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
-        let pipeline = self.device.create_compute_pipeline(ComputePipelineDesc {
-            shader: sh, entry, block: [256, 1, 1],
-        }).map_err(|e| err(e.to_string()))?;
+        let pipeline = self.pipeline_for(shader, [256, 1, 1])?;
 
         let mut scalars = vec![Scalar::U32(n as u32)];
         scalars.extend_from_slice(extra_scalars);
@@ -300,10 +346,8 @@ impl ZenEngine {
 
         let out = self.download(bb, n).map_err(|e| err(e.to_string()))?;
 
-        self.device.destroy_pipeline(pipeline);
-        self.device.destroy_shader(sh);
-        self.device.destroy_buffer(ba);
-        self.device.destroy_buffer(bb);
+        self.recycle(ba, n);
+        self.recycle(bb, n);
         Ok(out)
     }
 
@@ -344,11 +388,7 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(m * n).map_err(|e| err(e.to_string()))?;
 
-        let (desc, entry) = self.pick(&SGEMM);
-        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
-        let pipeline = self.device.create_compute_pipeline(ComputePipelineDesc {
-            shader: sh, entry, block: [16, 16, 1],
-        }).map_err(|e| err(e.to_string()))?;
+        let pipeline = self.pipeline_for(&SGEMM, [16, 16, 1])?;
 
         let bindings = Bindings {
             buffers:  &[ba.index(), bb.index(), bc.index()],
@@ -360,11 +400,9 @@ impl ZenEngine {
 
         let out = self.download(bc, m * n).map_err(|e| err(e.to_string()))?;
 
-        self.device.destroy_pipeline(pipeline);
-        self.device.destroy_shader(sh);
-        self.device.destroy_buffer(ba);
-        self.device.destroy_buffer(bb);
-        self.device.destroy_buffer(bc);
+        self.recycle(ba, a.len());
+        self.recycle(bb, b.len());
+        self.recycle(bc, m * n);
         Ok(out)
     }
 
@@ -375,6 +413,20 @@ impl ZenEngine {
     pub fn mean(&self, a: &[f32]) -> Result<f32> {
         if a.is_empty() { return Ok(0.0); }
         Ok(a.iter().sum::<f32>() / a.len() as f32)
+    }
+}
+
+impl Drop for ZenEngine {
+    fn drop(&mut self) {
+        for bucket in self.pool.lock().unwrap().drain() {
+            for buf in bucket.1 {
+                self.device.destroy_buffer(buf);
+            }
+        }
+        for (_, cached) in self.pipelines.lock().unwrap().drain() {
+            self.device.destroy_pipeline(cached.pipeline);
+            self.device.destroy_shader(cached.shader);
+        }
     }
 }
 
