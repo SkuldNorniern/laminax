@@ -72,6 +72,59 @@ const BGEMM: ZslShader = zsl!(
     }
 );
 
+const TILED_SGEMM_HIP: &str = r#"
+#define TILE 16
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
+                float* __restrict__ C, unsigned int M, unsigned int N, unsigned int K) {
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+    unsigned int tx = threadIdx.x, ty = threadIdx.y;
+    unsigned int row = blockIdx.y * TILE + ty;
+    unsigned int col = blockIdx.x * TILE + tx;
+    float acc = 0.0f;
+    unsigned int tiles = (K + TILE - 1) / TILE;
+    for (unsigned int t = 0; t < tiles; ++t) {
+        unsigned int aCol = t * TILE + tx;
+        unsigned int bRow = t * TILE + ty;
+        As[ty][tx] = (row < M && aCol < K) ? A[row * K + aCol] : 0.0f;
+        Bs[ty][tx] = (bRow < K && col < N) ? B[bRow * N + col] : 0.0f;
+        __syncthreads();
+        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        __syncthreads();
+    }
+    if (row < M && col < N) C[row * N + col] = acc;
+}
+"#;
+
+const TILED_BGEMM_HIP: &str = r#"
+#define TILE 16
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
+                float* __restrict__ C, unsigned int M, unsigned int N, unsigned int K) {
+    __shared__ float As[TILE][TILE];
+    __shared__ float Bs[TILE][TILE];
+    unsigned int tx = threadIdx.x, ty = threadIdx.y;
+    unsigned int row = blockIdx.y * TILE + ty;
+    unsigned int col = blockIdx.x * TILE + tx;
+    unsigned int batch = blockIdx.z;
+    const float* Ab = A + (size_t)batch * M * K;
+    const float* Bb = B + (size_t)batch * K * N;
+    float acc = 0.0f;
+    unsigned int tiles = (K + TILE - 1) / TILE;
+    for (unsigned int t = 0; t < tiles; ++t) {
+        unsigned int aCol = t * TILE + tx;
+        unsigned int bRow = t * TILE + ty;
+        As[ty][tx] = (row < M && aCol < K) ? Ab[row * K + aCol] : 0.0f;
+        Bs[ty][tx] = (bRow < K && col < N) ? Bb[bRow * N + col] : 0.0f;
+        __syncthreads();
+        for (unsigned int i = 0; i < TILE; ++i) acc += As[ty][i] * Bs[i][tx];
+        __syncthreads();
+    }
+    if (row < M && col < N) C[(size_t)batch * M * N + row * N + col] = acc;
+}
+"#;
+
 const ADD: ZslShader = zsl!(
     push P { n: u32 }
     @workgroup_size(256)
@@ -326,6 +379,30 @@ impl ZenEngine {
         Ok(pipeline)
     }
 
+    /// Compiled raw HIP pipeline, building and caching it under `name` on first use.
+    fn pipeline_hip(
+        &self,
+        name: &'static str,
+        src: &'static str,
+        block: [u32; 3],
+    ) -> Result<zengpu::PipelineHandle> {
+        if let Some(cached) = self.pipelines.lock().unwrap().get(name) {
+            return Ok(cached.pipeline);
+        }
+        let desc = zengpu::ShaderDesc::hip(src);
+        let entry = "zsl_kernel";
+        let sh = self.device.create_shader(desc).map_err(|e| err(e.to_string()))?;
+        let pipeline = self
+            .device
+            .create_compute_pipeline(ComputePipelineDesc { shader: sh, entry, block })
+            .map_err(|e| err(e.to_string()))?;
+        self.pipelines
+            .lock()
+            .unwrap()
+            .insert(name, CachedPipeline { shader: sh, pipeline });
+        Ok(pipeline)
+    }
+
     fn upload(&self, data: &[f32]) -> zengpu::Result<zengpu::BufferHandle> {
         let buf = self.alloc(data.len())?;
         self.device.write_buffer(buf, 0, cast_f32(data))?;
@@ -439,7 +516,11 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(m * n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(&SGEMM, "sgemm", [16, 16, 1])?;
+        let pipeline = if self.backend == BackendPreference::Hip {
+            self.pipeline_hip("sgemm_tiled", TILED_SGEMM_HIP, [16, 16, 1])?
+        } else {
+            self.pipeline_for(&SGEMM, "sgemm", [16, 16, 1])?
+        };
 
         let bindings = Bindings {
             buffers:  &[ba.index(), bb.index(), bc.index()],
@@ -472,7 +553,11 @@ impl ZenEngine {
         let bb = self.upload(b).map_err(|e| err(e.to_string()))?;
         let bc = self.alloc(batch * m * n).map_err(|e| err(e.to_string()))?;
 
-        let pipeline = self.pipeline_for(&BGEMM, "bgemm", [16, 16, 1])?;
+        let pipeline = if self.backend == BackendPreference::Hip {
+            self.pipeline_hip("bgemm_tiled", TILED_BGEMM_HIP, [16, 16, 1])?
+        } else {
+            self.pipeline_for(&BGEMM, "bgemm", [16, 16, 1])?
+        };
 
         let bindings = Bindings {
             buffers:  &[ba.index(), bb.index(), bc.index()],
