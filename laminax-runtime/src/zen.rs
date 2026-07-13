@@ -150,6 +150,97 @@ void zsl_kernel(const float* __restrict__ A, const float* __restrict__ B,
 }
 "#;
 
+const SOFTMAX_FWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ y,
+                unsigned int R, unsigned int D) {
+    unsigned int r = blockIdx.x * blockDim.x + threadIdx.x;
+    if (r >= R) return;
+    const float* xr = x + (size_t)r * D; float* yr = y + (size_t)r * D;
+    float m = -3.402823e38f;
+    for (unsigned int j=0;j<D;++j) m = fmaxf(m, xr[j]);
+    float s = 0.f;
+    for (unsigned int j=0;j<D;++j) { float e = __expf(xr[j]-m); yr[j]=e; s+=e; }
+    float inv = 1.f/s;
+    for (unsigned int j=0;j<D;++j) yr[j]*=inv;
+}
+"#;
+
+const SOFTMAX_BWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ y, const float* __restrict__ g,
+                float* __restrict__ dx, unsigned int R, unsigned int D) {
+    unsigned int r = blockIdx.x*blockDim.x+threadIdx.x; if (r>=R) return;
+    const float* yr=y+(size_t)r*D; const float* gr=g+(size_t)r*D; float* o=dx+(size_t)r*D;
+    float dot=0.f; for (unsigned int j=0;j<D;++j) dot+=gr[j]*yr[j];
+    for (unsigned int j=0;j<D;++j) o[j]=yr[j]*(gr[j]-dot);
+}
+"#;
+
+const GELU_FWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, float* __restrict__ y, unsigned int N){
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x; if(i>=N)return;
+  float v=x[i]; float t=tanhf(0.7978845608f*(v+0.044715f*v*v*v));
+  y[i]=0.5f*v*(1.f+t);
+}
+"#;
+
+const GELU_BWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, const float* __restrict__ g,
+                float* __restrict__ dx, unsigned int N){
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x; if(i>=N)return;
+  float v=x[i]; float inner=0.7978845608f*(v+0.044715f*v*v*v); float t=tanhf(inner);
+  float dinner=0.7978845608f*(1.f+3.f*0.044715f*v*v); float dt=(1.f-t*t)*dinner;
+  dx[i]=g[i]*(0.5f*(1.f+t)+0.5f*v*dt);
+}
+"#;
+
+const ZERO_PAIR_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(float* __restrict__ a, float* __restrict__ b, unsigned int N) {
+  unsigned int i=blockIdx.x*blockDim.x+threadIdx.x; if(i>=N)return;
+  a[i]=0.f; b[i]=0.f;
+}
+"#;
+
+const LAYERNORM_FWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ x, const float* __restrict__ gamma,
+                const float* __restrict__ beta, float* __restrict__ out,
+                float* __restrict__ xhat, float* __restrict__ invstd,
+                unsigned int R, unsigned int D, float eps){
+  unsigned int r=blockIdx.x*blockDim.x+threadIdx.x; if(r>=R)return;
+  const float* xr=x+(size_t)r*D; float* o=out+(size_t)r*D; float* xh=xhat+(size_t)r*D;
+  float mean=0.f; for(unsigned int j=0;j<D;++j) mean+=xr[j]; mean/=D;
+  float var=0.f; for(unsigned int j=0;j<D;++j){float d=xr[j]-mean; var+=d*d;} var/=D;
+  float is=rsqrtf(var+eps); invstd[r]=is;
+  for(unsigned int j=0;j<D;++j){float h=(xr[j]-mean)*is; xh[j]=h; o[j]=h*gamma[j]+beta[j];}
+}
+"#;
+
+const LAYERNORM_BWD_HIP: &str = r#"
+extern "C" __global__ __launch_bounds__(256)
+void zsl_kernel(const float* __restrict__ g, const float* __restrict__ xhat,
+                const float* __restrict__ invstd, const float* __restrict__ gamma,
+                float* __restrict__ dx, float* __restrict__ dgamma,
+                float* __restrict__ dbeta, unsigned int R, unsigned int D){
+  unsigned int r=blockIdx.x*blockDim.x+threadIdx.x; if(r>=R)return;
+  const float* gr=g+(size_t)r*D; const float* xh=xhat+(size_t)r*D; float* o=dx+(size_t)r*D;
+  float is=invstd[r];
+  float md=0.f, mdx=0.f;
+  for(unsigned int j=0;j<D;++j){float dh=gr[j]*gamma[j]; md+=dh; mdx+=dh*xh[j];}
+  md/=D; mdx/=D;
+  for(unsigned int j=0;j<D;++j){
+    float dh=gr[j]*gamma[j];
+    o[j]=is*(dh-md-xh[j]*mdx);
+    atomicAdd(&dgamma[j], gr[j]*xh[j]);
+    atomicAdd(&dbeta[j],  gr[j]);
+  }
+}
+"#;
+
 const ADD: ZslShader = zsl!(
     push P { n: u32 }
     @workgroup_size(256)
@@ -485,6 +576,21 @@ impl ZenEngine {
         self.recycle(t.buf, t.len);
     }
 
+    fn dispatch_profiled(
+        &self,
+        pipeline: zengpu::PipelineHandle,
+        bindings: Bindings<'_>,
+        grid: [u32; 3],
+    ) -> Result<()> {
+        let start = prof().then(Instant::now);
+        let result = self.device.dispatch(pipeline, bindings, grid);
+        if let Some(start) = start {
+            DISPATCH_NS.fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            N_DISPATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        result.map_err(|e| err(e.to_string()))
+    }
+
     pub fn matmul_dev(
         &self,
         a: &DevTensor,
@@ -581,6 +687,149 @@ impl ZenEngine {
 
     pub fn div_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
         self.run_binary_dev(a, b, &DIV, "div")
+    }
+
+    pub fn softmax_dev(&self, x: &DevTensor, rows: usize, d: usize) -> Result<DevTensor> {
+        if x.len != rows * d {
+            return Err(err("softmax_dev input length mismatch"));
+        }
+        let y = self.alloc_dev(x.len)?;
+        let pipeline = self.pipeline_hip("softmax_fwd", SOFTMAX_FWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), y.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(rows as u32), Scalar::U32(d as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        Ok(y)
+    }
+
+    pub fn softmax_bwd_dev(
+        &self,
+        y: &DevTensor,
+        g: &DevTensor,
+        rows: usize,
+        d: usize,
+    ) -> Result<DevTensor> {
+        if y.len != rows * d || g.len != y.len {
+            return Err(err("softmax_bwd_dev input length mismatch"));
+        }
+        let dx = self.alloc_dev(y.len)?;
+        let pipeline = self.pipeline_hip("softmax_bwd", SOFTMAX_BWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[y.buf.index(), g.buf.index(), dx.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(rows as u32), Scalar::U32(d as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        Ok(dx)
+    }
+
+    pub fn gelu_dev(&self, x: &DevTensor, n: usize) -> Result<DevTensor> {
+        if x.len != n {
+            return Err(err("gelu_dev input length mismatch"));
+        }
+        let y = self.alloc_dev(n)?;
+        let pipeline = self.pipeline_hip("gelu_fwd", GELU_FWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), y.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(n as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(n as u32 + 255) / 256, 1, 1])?;
+        Ok(y)
+    }
+
+    pub fn gelu_bwd_dev(&self, x: &DevTensor, g: &DevTensor, n: usize) -> Result<DevTensor> {
+        if x.len != n || g.len != n {
+            return Err(err("gelu_bwd_dev input length mismatch"));
+        }
+        let dx = self.alloc_dev(n)?;
+        let pipeline = self.pipeline_hip("gelu_bwd", GELU_BWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[x.buf.index(), g.buf.index(), dx.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(n as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(n as u32 + 255) / 256, 1, 1])?;
+        Ok(dx)
+    }
+
+    pub fn layernorm_dev(
+        &self,
+        x: &DevTensor,
+        gamma: &DevTensor,
+        beta: &DevTensor,
+        rows: usize,
+        d: usize,
+        eps: f32,
+    ) -> Result<(DevTensor, DevTensor, DevTensor)> {
+        if x.len != rows * d || gamma.len != d || beta.len != d {
+            return Err(err("layernorm_dev input length mismatch"));
+        }
+        let out = self.alloc_dev(x.len)?;
+        let xhat = self.alloc_dev(x.len)?;
+        let invstd = self.alloc_dev(rows)?;
+        let pipeline = self.pipeline_hip("layernorm_fwd", LAYERNORM_FWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[
+                x.buf.index(),
+                gamma.buf.index(),
+                beta.buf.index(),
+                out.buf.index(),
+                xhat.buf.index(),
+                invstd.buf.index(),
+            ],
+            textures: &[],
+            scalars: &[
+                Scalar::U32(rows as u32),
+                Scalar::U32(d as u32),
+                Scalar::F32(eps),
+            ],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        Ok((out, xhat, invstd))
+    }
+
+    pub fn layernorm_bwd_dev(
+        &self,
+        g: &DevTensor,
+        xhat: &DevTensor,
+        invstd: &DevTensor,
+        gamma: &DevTensor,
+        rows: usize,
+        d: usize,
+    ) -> Result<(DevTensor, DevTensor, DevTensor)> {
+        if g.len != rows * d || xhat.len != g.len || invstd.len != rows || gamma.len != d {
+            return Err(err("layernorm_bwd_dev input length mismatch"));
+        }
+        let dx = self.alloc_dev(g.len)?;
+        // The backward kernel atomically accumulates these cross-row reductions.
+        let dgamma = self.alloc_dev(d)?;
+        let dbeta = self.alloc_dev(d)?;
+        let zero_pipeline = self.pipeline_hip("zero_pair", ZERO_PAIR_HIP, [256, 1, 1])?;
+        let zero_bindings = Bindings {
+            buffers: &[dgamma.buf.index(), dbeta.buf.index()],
+            textures: &[],
+            scalars: &[Scalar::U32(d as u32)],
+        };
+        self.dispatch_profiled(zero_pipeline, zero_bindings, [(d as u32 + 255) / 256, 1, 1])?;
+        let pipeline = self.pipeline_hip("layernorm_bwd", LAYERNORM_BWD_HIP, [256, 1, 1])?;
+        let bindings = Bindings {
+            buffers: &[
+                g.buf.index(),
+                xhat.buf.index(),
+                invstd.buf.index(),
+                gamma.buf.index(),
+                dx.buf.index(),
+                dgamma.buf.index(),
+                dbeta.buf.index(),
+            ],
+            textures: &[],
+            scalars: &[Scalar::U32(rows as u32), Scalar::U32(d as u32)],
+        };
+        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        Ok((dx, dgamma, dbeta))
     }
 
     fn run_binary(
