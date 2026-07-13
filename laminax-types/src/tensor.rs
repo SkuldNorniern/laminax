@@ -6,13 +6,38 @@
 //! Use [`Tensor::from_slice`] with types that implement Numina's [`TensorElement`].
 
 use std::fmt;
-use numina::{NdArray, Shape, Strides, TensorElement, DType};
+use numina::{NdArray, Shape, Strides, DType};
+// numina 0.0.2 names its element trait `DTypeElement`; keep the local `TensorElement`
+// spelling used throughout this module.
+use numina::DTypeElement as TensorElement;
 use numina::{add as numina_add, mul as numina_mul};
 use numina::{sum as numina_sum, mean as numina_mean};
 use numina::{exp as numina_exp, log as numina_log, sqrt as numina_sqrt};
 
 // Re-export types that are part of the laminax-types API
 pub use numina::{BFloat16, QuantizedU8, QuantizedI4};
+
+/// Build a 1-D numina array from `f64` values for a floating dtype.
+///
+/// Used by [`Tensor::arange`] / [`Tensor::linspace`]. numina 0.0.2 has no
+/// `arange`/`linspace`, so the values are generated here and materialized into
+/// a typed [`numina::Array`]. Only `F32` and `F64` are supported.
+fn ndarray_1d_from_f64(dtype: DType, vals: &[f64]) -> Result<Box<dyn NdArray>, String> {
+    let shape = Shape::from([vals.len()]);
+    match dtype {
+        DType::F32 => {
+            let v: Vec<f32> = vals.iter().map(|&x| x as f32).collect();
+            Ok(Box::new(numina::Array::from_slice(&v, shape)?))
+        }
+        DType::F64 => {
+            let v: Vec<f64> = vals.to_vec();
+            Ok(Box::new(numina::Array::from_slice(&v, shape)?))
+        }
+        other => Err(format!(
+            "arange/linspace: unsupported dtype {other:?} (only F32/F64)"
+        )),
+    }
+}
 
 /// Backend storage for tensor data. Implement this (or use [`CpuStorage`]) instead of Numina's NdArray.
 pub trait TensorStorage: Send + Sync + std::fmt::Debug {
@@ -208,9 +233,19 @@ impl Tensor {
         T: TensorElement,
         F: FnOnce(Vec<u8>, Shape, DType) -> Box<dyn TensorStorage>,
     {
-        let nt = numina::Tensor::from_vec(data.to_vec(), shape.dims())
-            .expect("data len must equal product of shape dimensions");
-        Self::new(nt.to_bytes(), shape, nt.dtype(), backend_factory)
+        assert_eq!(
+            data.len(),
+            shape.len(),
+            "data len must equal product of shape dimensions"
+        );
+        // `T: TensorElement` (= numina `DTypeElement: DTypeLike`) carries its dtype as a const,
+        // and is `Copy` with a layout matching that dtype, so the raw bytes are a direct view.
+        let dtype = <T as numina::DTypeLike>::DTYPE;
+        let bytes = unsafe {
+            std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+        }
+        .to_vec();
+        Self::new(bytes, shape, dtype, backend_factory)
     }
 
     /// Create tensor filled with zeros using a specific backend
@@ -240,16 +275,38 @@ impl Tensor {
         }
     }
 
-    /// Like `np.arange`: 1D tensor with values [start, stop) with step. F32/F64 and integer dtypes.
+    /// Like `np.arange`: 1D tensor with values [start, stop) with step. F32/F64.
     pub fn arange(dtype: DType, start: f64, stop: f64, step: f64) -> Result<Self, String> {
-        let arr = numina::arange(dtype, start, stop, step)?;
-        Ok(Tensor::from_ndarray(Box::new(arr)))
+        if step == 0.0 {
+            return Err("arange: step must be non-zero".to_string());
+        }
+        let mut vals = Vec::new();
+        let mut x = start;
+        if step > 0.0 {
+            while x < stop {
+                vals.push(x);
+                x += step;
+            }
+        } else {
+            while x > stop {
+                vals.push(x);
+                x += step;
+            }
+        }
+        Ok(Tensor::from_ndarray(ndarray_1d_from_f64(dtype, &vals)?))
     }
 
     /// Like `np.linspace`: 1D tensor with `num` values from start to end (inclusive). F32/F64.
     pub fn linspace(dtype: DType, start: f64, end: f64, num: usize) -> Result<Self, String> {
-        let arr = numina::linspace(dtype, start, end, num)?;
-        Ok(Tensor::from_ndarray(Box::new(arr)))
+        let mut vals = Vec::with_capacity(num);
+        if num == 1 {
+            vals.push(start);
+        } else {
+            for i in 0..num {
+                vals.push(start + (end - start) * (i as f64) / ((num - 1) as f64));
+            }
+        }
+        Ok(Tensor::from_ndarray(ndarray_1d_from_f64(dtype, &vals)?))
     }
 
     /// Get tensor shape (NumPy: `shape`).
