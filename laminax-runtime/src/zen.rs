@@ -1,6 +1,6 @@
 #![cfg(feature = "gpu")]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::sync::OnceLock;
@@ -623,6 +623,21 @@ impl ZenEngine {
 
     fn recycle(&self, buf: zengpu::BufferHandle, n: usize) {
         let mut pool = self.pool.lock().unwrap();
+        let already_pooled = pool
+            .values()
+            .any(|bucket| bucket.iter().any(|&pooled| pooled == buf));
+        debug_assert!(
+            !already_pooled,
+            "device buffer recycled twice: index={}, generation={}",
+            buf.index(),
+            buf.generation(),
+        );
+        // Keep the release-build guard as a last line of defence. Destroying a
+        // duplicate here would free the allocation still represented by the
+        // first pool entry, so the only safe response is to retain one entry.
+        if already_pooled {
+            return;
+        }
         let bucket = pool.entry(n).or_default();
         if bucket.len() < POOL_BUCKET_CAP {
             bucket.push(buf);
@@ -1416,9 +1431,12 @@ impl ZenEngine {
 
 impl Drop for ZenEngine {
     fn drop(&mut self) {
+        let mut destroyed = HashSet::new();
         for bucket in self.pool.lock().unwrap().drain() {
             for buf in bucket.1 {
-                self.device.destroy_buffer(buf);
+                if destroyed.insert(buf) {
+                    self.device.destroy_buffer(buf);
+                }
             }
         }
         for (_, cached) in self.pipelines.lock().unwrap().drain() {
