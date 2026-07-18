@@ -43,6 +43,18 @@ impl TypeMapper for CTypeMapper {
             DType::BF16 => "half".to_string(), // Approximate mapping
             DType::QI4 => "char".to_string(), // Packed format
             DType::QU8 => "unsigned char".to_string(),
+            dtype @ (DType::BF8
+            | DType::F8E4M3FN
+            | DType::F8E5M2
+            | DType::Complex32
+            | DType::Complex64
+            | DType::Complex128) => {
+                return Err(CodegenError::UnsupportedType {
+                    backend: "C",
+                    dtype,
+                    reason: "no portable built-in C type is available",
+                });
+            }
         })
     }
 
@@ -84,6 +96,16 @@ impl TypeMapper for MetalTypeMapper {
             }),
             DType::QI4 => Ok("char".to_string()),
             DType::QU8 => Ok("uchar".to_string()),
+            dtype @ (DType::BF8
+            | DType::F8E4M3FN
+            | DType::F8E5M2
+            | DType::Complex32
+            | DType::Complex64
+            | DType::Complex128) => Err(CodegenError::UnsupportedType {
+                backend: "Metal",
+                dtype,
+                reason: "the dtype has no supported Metal Shading Language mapping",
+            }),
         }
     }
 
@@ -121,6 +143,18 @@ impl TypeMapper for WgslTypeMapper {
             DType::BF16 => "f16".to_string(), // Approximate mapping
             DType::QI4 => "i8".to_string(),
             DType::QU8 => "u8".to_string(),
+            dtype @ (DType::BF8
+            | DType::F8E4M3FN
+            | DType::F8E5M2
+            | DType::Complex32
+            | DType::Complex64
+            | DType::Complex128) => {
+                return Err(CodegenError::UnsupportedType {
+                    backend: "WGSL",
+                    dtype,
+                    reason: "the dtype has no supported WGSL mapping",
+                });
+            }
         })
     }
 

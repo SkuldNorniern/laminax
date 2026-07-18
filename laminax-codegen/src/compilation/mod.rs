@@ -3,6 +3,7 @@
 //! Each module handles the compilation of lowered code
 //! to executable artifacts for specific compute platforms.
 
+#[cfg(feature = "lamina")]
 pub mod cpu;
 pub mod cuda;
 pub mod metal;

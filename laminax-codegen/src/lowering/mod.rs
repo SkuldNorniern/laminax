@@ -4,6 +4,7 @@
 //! to specific backend formats (Lamina IR, CUDA, Metal, SPIR-V, etc.).
 
 pub mod cuda;
+#[cfg(feature = "lamina")]
 pub mod lamina;
 pub mod metal;
 pub mod spirv;

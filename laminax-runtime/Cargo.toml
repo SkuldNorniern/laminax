@@ -14,7 +14,7 @@ gpu = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip", "zengpu/vulkan"]
 # CPU AOT JIT path (aot.rs): lowers LCIR → Lamina IR → MIR → native code via lamina.
 # Kept optional because it pulls the `lamina` toolchain (and `lamina-ras`); the GPU
 # ZenEngine path does not need it.
-aot = ["dep:lamina", "dep:laminax-codegen"]
+aot = ["dep:lamina", "dep:laminax-codegen", "laminax-codegen/lamina"]
 
 [dependencies]
 laminax-types = { path = "../laminax-types" }

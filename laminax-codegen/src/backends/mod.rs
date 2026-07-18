@@ -4,6 +4,7 @@
 //! specific hardware platforms (CPU, GPU, accelerators, etc.).
 
 pub mod apple;
+#[cfg(feature = "lamina")]
 pub mod cpu;
 pub mod cuda;
 pub mod metal;

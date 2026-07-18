@@ -6,7 +6,10 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+lamina = ["dep:lamina"]
+
 [dependencies]
-lamina = { path = "../../lamina", features = ["encoder"] }
+lamina = { path = "../../lamina", features = ["encoder"], optional = true }
 laminax = { package = "laminax-types", path = "../laminax-types" }
 laminax-lcir = { path = "../laminax-lcir" }

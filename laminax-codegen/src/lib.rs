@@ -17,9 +17,9 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```no_run
 //! use laminax_codegen::{Backend, compile_from_lcir};
-//! use laminax::lcir::{KernelBuilder, MemoryScope};
+//! use laminax_lcir::{KernelBuilder, MemoryScope};
 //! use laminax::{Shape, I32};
 //!
 //! fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,6 +63,7 @@ pub enum CodegenError {
     },
 }
 
+#[cfg(feature = "lamina")]
 impl From<lamina::LaminaError> for CodegenError {
     fn from(e: lamina::LaminaError) -> Self {
         CodegenError::Lamina(e.to_string())
@@ -102,10 +103,12 @@ pub enum Backend {
 }
 
 /// Trait that upstream callers can implement to produce Lamina IR.
+#[cfg(feature = "lamina")]
 pub trait ToLaminaIr {
     fn to_lamina_ir(&self) -> std::result::Result<String, CodegenError>;
 }
 
+#[cfg(feature = "lamina")]
 impl ToLaminaIr for laminax_lcir::Kernel {
     fn to_lamina_ir(&self) -> std::result::Result<String, CodegenError> {
         lowering::lamina::lower_lcir_to_lamina(self)
@@ -113,6 +116,7 @@ impl ToLaminaIr for laminax_lcir::Kernel {
 }
 
 /// Compile a Lamina IR program to a textual assembly for the current host CPU.
+#[cfg(feature = "lamina")]
 pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> std::result::Result<String, CodegenError> {
     let compiler = compilation::cpu::CpuCompiler::new();
     let asm_bytes = compiler.compile(ir)?;
@@ -124,6 +128,7 @@ pub fn compile_lamina_ir_for_host_cpu(ir: &str) -> std::result::Result<String, C
 }
 
 /// Compile a Lamina IR program to a backend-specific artifact.
+#[cfg(feature = "lamina")]
 pub fn compile_lamina_ir(ir: &str, backend: Backend) -> std::result::Result<Vec<u8>, CodegenError> {
     match backend {
         Backend::Cpu => {
@@ -143,6 +148,7 @@ pub fn compile_lamina_ir(ir: &str, backend: Backend) -> std::result::Result<Vec<
 }
 
 /// Convenience: lower a `ToLaminaIr` into Lamina IR then compile for a specific backend.
+#[cfg(feature = "lamina")]
 pub fn lower_and_compile<T: ToLaminaIr>(
     lowerable: &T,
     backend: Backend,
@@ -158,8 +164,15 @@ pub fn compile_from_lcir(
 ) -> std::result::Result<Vec<u8>, CodegenError> {
     match backend {
         Backend::Cpu => {
-            let backend = backends::cpu::CpuBackend::new();
-            backend.compile_from_lcir(kernel)
+            #[cfg(feature = "lamina")]
+            {
+                let backend = backends::cpu::CpuBackend::new();
+                return backend.compile_from_lcir(kernel);
+            }
+            #[cfg(not(feature = "lamina"))]
+            Err(CodegenError::UnsupportedTarget(
+                "CPU codegen requires the `lamina` feature",
+            ))
         }
         Backend::Metal => {
             let backend = backends::metal::MetalBackend::new();
