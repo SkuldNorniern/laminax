@@ -65,10 +65,11 @@ pub type Result<T> = StdResult<T, LaminaxError>;
 
 // Test backend factory for lib tests
 #[cfg(test)]
-fn lib_test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn NdArray> {
+fn lib_test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dyn TensorStorage> {
     struct LibTestArray {
         data: Vec<u8>,
         shape: Shape,
+        strides: Strides,
         dtype: DType,
     }
     impl std::fmt::Debug for LibTestArray {
@@ -80,12 +81,12 @@ fn lib_test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dy
             )
         }
     }
-    impl NdArray for LibTestArray {
+    impl TensorStorage for LibTestArray {
         fn shape(&self) -> &Shape {
             &self.shape
         }
         fn strides(&self) -> &Strides {
-            panic!("strides not implemented for test backend")
+            &self.strides
         }
         fn len(&self) -> usize {
             self.shape.len()
@@ -99,30 +100,41 @@ fn lib_test_backend_factory(data: Vec<u8>, shape: Shape, dtype: DType) -> Box<dy
         unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
             unimplemented!()
         }
-        fn clone_array(&self) -> Box<dyn NdArray> {
+        fn clone_storage(&self) -> Box<dyn TensorStorage> {
             Box::new(LibTestArray {
                 data: self.data.clone(),
                 shape: self.shape.clone(),
+                strides: self.strides.clone(),
                 dtype: self.dtype,
             })
         }
-        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+        fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
             unimplemented!()
         }
-        fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> {
+        fn transpose(&self) -> std::result::Result<Box<dyn TensorStorage>, String> {
             unimplemented!()
         }
-        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+        fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
             unimplemented!()
         }
-        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+        fn ones(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
             unimplemented!()
         }
-        fn new_array(&self, _: Shape, _: DType) -> std::result::Result<Box<dyn NdArray>, String> {
+        fn new_array(
+            &self,
+            _: Shape,
+            _: DType,
+        ) -> std::result::Result<Box<dyn TensorStorage>, String> {
             unimplemented!()
         }
     }
-    Box::new(LibTestArray { data, shape, dtype })
+    let strides = Strides::from_shape(&shape);
+    Box::new(LibTestArray {
+        data,
+        shape,
+        strides,
+        dtype,
+    })
 }
 
 #[cfg(test)]
@@ -136,6 +148,7 @@ mod tests {
         let tensor = Tensor::zeros(F32, shape.clone(), |dtype, shape| {
             struct TestArray {
                 shape: Shape,
+                strides: Strides,
                 dtype: DType,
             }
             impl std::fmt::Debug for TestArray {
@@ -147,12 +160,12 @@ mod tests {
                     )
                 }
             }
-            impl NdArray for TestArray {
+            impl TensorStorage for TestArray {
                 fn shape(&self) -> &Shape {
                     &self.shape
                 }
                 fn strides(&self) -> &Strides {
-                    panic!("strides not implemented for test backend")
+                    &self.strides
                 }
                 fn len(&self) -> usize {
                     self.shape.len()
@@ -166,33 +179,39 @@ mod tests {
                 unsafe fn as_mut_bytes(&mut self) -> &mut [u8] {
                     unimplemented!()
                 }
-                fn clone_array(&self) -> Box<dyn NdArray> {
+                fn clone_storage(&self) -> Box<dyn TensorStorage> {
                     Box::new(TestArray {
                         shape: self.shape.clone(),
+                        strides: self.strides.clone(),
                         dtype: self.dtype,
                     })
                 }
-                fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+                fn reshape(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
                     unimplemented!()
                 }
-                fn transpose(&self) -> std::result::Result<Box<dyn NdArray>, String> {
+                fn transpose(&self) -> std::result::Result<Box<dyn TensorStorage>, String> {
                     unimplemented!()
                 }
-                fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+                fn zeros(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
                     unimplemented!()
                 }
-                fn ones(&self, _: Shape) -> std::result::Result<Box<dyn NdArray>, String> {
+                fn ones(&self, _: Shape) -> std::result::Result<Box<dyn TensorStorage>, String> {
                     unimplemented!()
                 }
                 fn new_array(
                     &self,
                     _: Shape,
                     _: DType,
-                ) -> std::result::Result<Box<dyn NdArray>, String> {
+                ) -> std::result::Result<Box<dyn TensorStorage>, String> {
                     unimplemented!()
                 }
             }
-            Box::new(TestArray { shape, dtype })
+            let strides = Strides::from_shape(&shape);
+            Box::new(TestArray {
+                shape,
+                strides,
+                dtype,
+            })
         });
         assert_eq!(tensor.shape(), &shape);
         assert_eq!(tensor.dtype(), F32);
