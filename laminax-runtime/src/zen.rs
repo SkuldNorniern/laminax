@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use zengpu::{
-    BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, GpuDevice, Instance,
+    BackendPreference, Bindings, BufferDesc, BufferUsage, ComputePipelineDesc, Instance,
     MemoryUsage, PipelineHandle, Scalar, ShaderDesc,
 };
 use zengpu_spirv::{ZslShader, zsl};
@@ -1355,7 +1355,7 @@ impl DevTensor {
 }
 
 pub struct ZenEngine {
-    device: Arc<dyn GpuDevice>,
+    device: Arc<zengpu::Device>,
     #[allow(dead_code)]
     instance: Instance,
     backend: BackendPreference,
@@ -1391,7 +1391,7 @@ impl ZenEngine {
             ))
         })?;
         let device_name = adapter.info().name.clone();
-        let device: Arc<dyn GpuDevice> = Arc::from(
+        let device = Arc::new(
             adapter
                 .open(zengpu::DeviceRequest::default())
                 .map_err(|e| err(format!("open device: {e}")))?,
@@ -1419,6 +1419,10 @@ impl ZenEngine {
 
     pub fn backend(&self) -> BackendPreference {
         self.backend
+    }
+
+    pub fn device_ref(&self) -> &dyn zengpu::GpuDevice {
+        self.device.as_dyn()
     }
 
     fn pick<'a>(&self, shader: &'a ZslShader) -> (ShaderDesc<'a>, &'static str) {
@@ -1941,6 +1945,58 @@ impl ZenEngine {
 
     pub fn add_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
         self.run_binary_dev(a, b, &ADD, "add")
+    }
+
+    /// Add a device-resident tensor owned by another engine into `local`.
+    /// `copy_from_peer` transparently uses host staging when direct P2P is unavailable.
+    pub fn reduce_add_peer(
+        &self,
+        local: &DevTensor,
+        peer: &ZenEngine,
+        peer_buf: &DevTensor,
+    ) -> Result<()> {
+        if local.len != peer_buf.len {
+            return Err(err(format!(
+                "peer reduce tensor length mismatch: {} != {}",
+                local.len, peer_buf.len
+            )));
+        }
+        if local.dtype != peer_buf.dtype {
+            return Err(err(format!(
+                "peer reduce tensor dtype mismatch: {:?} != {:?}",
+                local.dtype, peer_buf.dtype
+            )));
+        }
+        if local.dtype != DTypeId::F32 {
+            return Err(err(format!(
+                "peer reduce only supports F32, got {:?}",
+                local.dtype
+            )));
+        }
+
+        let temp = self.alloc_dev_dtype(local.len, local.dtype)?;
+        let bytes = local
+            .len
+            .checked_mul(elem_bytes(local.dtype)?)
+            .ok_or_else(|| err("peer reduce byte size overflow"))? as u64;
+        let result = (|| {
+            self.device_ref()
+                .copy_from_peer(temp.buf, peer.device_ref(), peer_buf.buf, bytes)
+                .map_err(|e| err(e.to_string()))?;
+            let pipeline = self.kernel_pipeline("add", &ADD, None, [256, 1, 1])?;
+            let bindings = Bindings {
+                buffers: &[local.buf.index(), temp.buf.index(), local.buf.index()],
+                textures: &[],
+                scalars: &[Scalar::U32(local.len as u32)],
+            };
+            self.dispatch_profiled(
+                pipeline,
+                bindings,
+                [(local.len as u32 + 255) / 256, 1, 1],
+            )
+        })();
+        self.free_dev(temp);
+        result
     }
 
     pub fn sub_dev(&self, a: &DevTensor, b: &DevTensor) -> Result<DevTensor> {
@@ -2734,6 +2790,45 @@ fn build_instance() -> zengpu::Result<(Instance, BackendPreference)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allreduce_mean_peer() -> Result<()> {
+        if ZenEngine::adapter_count() < 2 {
+            println!("skipping allreduce_mean_peer: fewer than 2 GPUs");
+            return Ok(());
+        }
+        let engine0 = ZenEngine::with_adapter(0)?;
+        let engine1 = ZenEngine::with_adapter(1)?;
+        if engine0.backend() != BackendPreference::Hip
+            || engine1.backend() != BackendPreference::Hip
+        {
+            println!("skipping allreduce_mean_peer: HIP backend unavailable");
+            return Ok(());
+        }
+
+        let a = [1.0, -2.0, 3.5, 8.0, -0.25];
+        let b = [5.0, 6.0, -1.5, -4.0, 2.25];
+        let da = engine0.upload_dev(&a)?;
+        let db = engine1.upload_dev(&b)?;
+        let direct = engine0
+            .device_ref()
+            .can_peer(engine1.device_ref().device_ordinal());
+        println!(
+            "allreduce_mean_peer: {}",
+            if direct { "P2P" } else { "host-fallback" }
+        );
+
+        engine0.reduce_add_peer(&da, &engine1, &db)?;
+        let mean = engine0.scale_dev(&da, 0.5)?;
+        let actual = engine0.download_dev(&mean)?;
+        let expected: Vec<f32> = a.iter().zip(b).map(|(x, y)| (x + y) * 0.5).collect();
+
+        engine0.free_dev(da);
+        engine0.free_dev(mean);
+        engine1.free_dev(db);
+        assert_eq!(actual, expected);
+        Ok(())
+    }
 
     #[test]
     fn dev_resident_matmul() -> Result<()> {
