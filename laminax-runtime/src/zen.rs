@@ -199,22 +199,35 @@ const SOFTMAX_FWD_ZSL: ZslShader = zsl!(
         p: P,
         id: global_id,
     ) {
-        let r = id.x
+        let r = group_id().x
         if r < p.rows {
             let base = r * p.d
-            let m: f32 = -3.402823e38
-            for j in 0..p.d {
-                m = max(m, x[base + j])
+            let lane = local_id().x
+            let chunks = (p.d + 255u32) / 256u32
+            let local_m: f32 = -3.402823e38
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    local_m = max(local_m, x[base + j])
+                }
             }
-            let sum: f32 = 0.0
-            for j in 0..p.d {
-                let e = exp(x[base + j] - m)
-                y[base + j] = e
-                sum = sum + e
+            let m = workgroup_reduce_max(local_m)
+            let local_sum: f32 = 0.0
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    let e = exp(x[base + j] - m)
+                    y[base + j] = e
+                    local_sum = local_sum + e
+                }
             }
+            let sum = workgroup_reduce_add(local_sum)
             let inv = 1.0 / sum
-            for j in 0..p.d {
-                y[base + j] = y[base + j] * inv
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    y[base + j] = y[base + j] * inv
+                }
             }
         }
     }
@@ -230,15 +243,24 @@ const SOFTMAX_BWD_ZSL: ZslShader = zsl!(
         p: P,
         id: global_id,
     ) {
-        let r = id.x
+        let r = group_id().x
         if r < p.rows {
             let base = r * p.d
-            let dot: f32 = 0.0
-            for j in 0..p.d {
-                dot = dot + g[base + j] * y[base + j]
+            let lane = local_id().x
+            let chunks = (p.d + 255u32) / 256u32
+            let local_dot: f32 = 0.0
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    local_dot = local_dot + g[base + j] * y[base + j]
+                }
             }
-            for j in 0..p.d {
-                dx[base + j] = y[base + j] * (g[base + j] - dot)
+            let dot = workgroup_reduce_add(local_dot)
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    dx[base + j] = y[base + j] * (g[base + j] - dot)
+                }
             }
         }
     }
@@ -314,26 +336,39 @@ const LAYERNORM_FWD_ZSL: ZslShader = zsl!(
         p: P,
         id: global_id,
     ) {
-        let r = id.x
+        let r = group_id().x
         if r < p.rows {
             let base = r * p.d
-            let mean: f32 = 0.0
-            for j in 0..p.d {
-                mean = mean + x[base + j]
+            let lane = local_id().x
+            let chunks = (p.d + 255u32) / 256u32
+            let local_sum: f32 = 0.0
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    local_sum = local_sum + x[base + j]
+                }
             }
-            mean = mean / p.d
-            let var: f32 = 0.0
-            for j in 0..p.d {
-                let delta = x[base + j] - mean
-                var = var + delta * delta
+            let mean = workgroup_reduce_add(local_sum) / p.d
+            let local_var: f32 = 0.0
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    let delta = x[base + j] - mean
+                    local_var = local_var + delta * delta
+                }
             }
-            var = var / p.d
+            let var = workgroup_reduce_add(local_var) / p.d
             let is = 1.0 / sqrt(var + p.eps)
-            invstd[r] = is
-            for j in 0..p.d {
-                let h = (x[base + j] - mean) * is
-                xhat[base + j] = h
-                out[base + j] = h * gamma[j] + beta[j]
+            if lane < 1u32 {
+                invstd[r] = is
+            }
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    let h = (x[base + j] - mean) * is
+                    xhat[base + j] = h
+                    out[base + j] = h * gamma[j] + beta[j]
+                }
             }
         }
     }
@@ -353,23 +388,32 @@ const LAYERNORM_BWD_ZSL: ZslShader = zsl!(
         p: P,
         id: global_id,
     ) {
-        let r = id.x
+        let r = group_id().x
         if r < p.rows {
             let base = r * p.d
-            let md: f32 = 0.0
-            let mdx: f32 = 0.0
-            for j in 0..p.d {
-                let dh = g[base + j] * gamma[j]
-                md = md + dh
-                mdx = mdx + dh * xhat[base + j]
+            let lane = local_id().x
+            let chunks = (p.d + 255u32) / 256u32
+            let local_md: f32 = 0.0
+            let local_mdx: f32 = 0.0
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    let dh = g[base + j] * gamma[j]
+                    local_md = local_md + dh
+                    local_mdx = local_mdx + dh * xhat[base + j]
+                }
             }
-            md = md / p.d
-            mdx = mdx / p.d
-            for j in 0..p.d {
-                let dh = g[base + j] * gamma[j]
-                dx[base + j] = invstd[r] * (dh - md - xhat[base + j] * mdx)
-                atomic_add(dgamma, j, g[base + j] * xhat[base + j])
-                atomic_add(dbeta, j, g[base + j])
+            let md = workgroup_reduce_add(local_md) / p.d
+            let mdx = workgroup_reduce_add(local_mdx) / p.d
+            let is = invstd[r]
+            for c in 0..chunks {
+                let j = lane + c * 256u32
+                if j < p.d {
+                    let dh = g[base + j] * gamma[j]
+                    dx[base + j] = is * (dh - md - xhat[base + j] * mdx)
+                    atomic_add(dgamma, j, g[base + j] * xhat[base + j])
+                    atomic_add(dbeta, j, g[base + j])
+                }
             }
         }
     }
@@ -2101,7 +2145,12 @@ impl ZenEngine {
             textures: &[],
             scalars: &[Scalar::U32(rows as u32), Scalar::U32(d as u32)],
         };
-        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        let grid_x = if self.raw_hip_enabled() {
+            (rows as u32 + 255) / 256
+        } else {
+            rows as u32
+        };
+        self.dispatch_profiled(pipeline, bindings, [grid_x, 1, 1])?;
         Ok(y)
     }
 
@@ -2127,7 +2176,12 @@ impl ZenEngine {
             textures: &[],
             scalars: &[Scalar::U32(rows as u32), Scalar::U32(d as u32)],
         };
-        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        let grid_x = if self.raw_hip_enabled() {
+            (rows as u32 + 255) / 256
+        } else {
+            rows as u32
+        };
+        self.dispatch_profiled(pipeline, bindings, [grid_x, 1, 1])?;
         Ok(dx)
     }
 
@@ -2208,7 +2262,12 @@ impl ZenEngine {
                 Scalar::F32(eps),
             ],
         };
-        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        let grid_x = if self.raw_hip_enabled() {
+            (rows as u32 + 255) / 256
+        } else {
+            rows as u32
+        };
+        self.dispatch_profiled(pipeline, bindings, [grid_x, 1, 1])?;
         Ok((out, xhat, invstd))
     }
 
@@ -2259,7 +2318,12 @@ impl ZenEngine {
             textures: &[],
             scalars: &[Scalar::U32(rows as u32), Scalar::U32(d as u32)],
         };
-        self.dispatch_profiled(pipeline, bindings, [(rows as u32 + 255) / 256, 1, 1])?;
+        let grid_x = if self.raw_hip_enabled() {
+            (rows as u32 + 255) / 256
+        } else {
+            rows as u32
+        };
+        self.dispatch_profiled(pipeline, bindings, [grid_x, 1, 1])?;
         Ok((dx, dgamma, dbeta))
     }
 
@@ -2872,6 +2936,364 @@ mod tests {
         engine.free_dev(dc);
 
         assert!(max_err < 1e-3, "max error {max_err} exceeded tolerance");
+        Ok(())
+    }
+
+    #[test]
+    fn softmax_zsl_workgroup_reduce_matches_cpu_reference() -> Result<()> {
+        unsafe {
+            std::env::set_var("ZEN_FORCE_ZSL", "1");
+        }
+        let engine = match ZenEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => {
+                println!("skipping softmax_zsl_workgroup_reduce_matches_cpu_reference: {error}");
+                return Ok(());
+            }
+        };
+        if engine.backend() != BackendPreference::Hip {
+            println!(
+                "skipping softmax_zsl_workgroup_reduce_matches_cpu_reference: HIP backend unavailable"
+            );
+            return Ok(());
+        }
+
+        const ROWS: usize = 37;
+        const D: usize = 200;
+        let x: Vec<f32> = (0..ROWS * D)
+            .map(|i| (i as f32 * 0.013).sin() * 5.0)
+            .collect();
+        let mut expected = vec![0.0; x.len()];
+        for r in 0..ROWS {
+            let base = r * D;
+            let m = x[base..base + D]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let mut sum = 0.0;
+            for j in 0..D {
+                let e = (x[base + j] - m).exp();
+                expected[base + j] = e;
+                sum += e;
+            }
+            for j in 0..D {
+                expected[base + j] /= sum;
+            }
+        }
+
+        let x_dev = engine.upload_dev(&x)?;
+        let y_dev = engine.softmax_dev(&x_dev, ROWS, D)?;
+        let actual = engine.download_dev(&y_dev)?;
+        let max_err = actual
+            .iter()
+            .zip(&expected)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        println!("softmax ZSL workgroup max err: {max_err}");
+
+        engine.free_dev(x_dev);
+        engine.free_dev(y_dev);
+        assert!(max_err < 1e-4, "max error {max_err} exceeded tolerance");
+        Ok(())
+    }
+
+    #[test]
+    fn softmax_bwd_zsl_workgroup_reduce_matches_cpu_reference() -> Result<()> {
+        unsafe {
+            std::env::set_var("ZEN_FORCE_ZSL", "1");
+        }
+        let engine = match ZenEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => {
+                println!(
+                    "skipping softmax_bwd_zsl_workgroup_reduce_matches_cpu_reference: {error}"
+                );
+                return Ok(());
+            }
+        };
+        if engine.backend() != BackendPreference::Hip {
+            println!(
+                "skipping softmax_bwd_zsl_workgroup_reduce_matches_cpu_reference: HIP backend unavailable"
+            );
+            return Ok(());
+        }
+
+        const ROWS: usize = 37;
+        const D: usize = 200;
+        let x: Vec<f32> = (0..ROWS * D)
+            .map(|i| (i as f32 * 0.013).sin() * 5.0)
+            .collect();
+        let g: Vec<f32> = (0..ROWS * D)
+            .map(|i| (i as f32 * 0.017).cos() * 1.75)
+            .collect();
+        let mut y = vec![0.0; x.len()];
+        let mut expected = vec![0.0; x.len()];
+        for r in 0..ROWS {
+            let base = r * D;
+            let m = x[base..base + D]
+                .iter()
+                .copied()
+                .fold(f32::NEG_INFINITY, f32::max);
+            let mut sum = 0.0;
+            for j in 0..D {
+                y[base + j] = (x[base + j] - m).exp();
+                sum += y[base + j];
+            }
+            for j in 0..D {
+                y[base + j] /= sum;
+            }
+            let mut dot = 0.0;
+            for j in 0..D {
+                dot += g[base + j] * y[base + j];
+            }
+            for j in 0..D {
+                expected[base + j] = y[base + j] * (g[base + j] - dot);
+            }
+        }
+
+        let y_dev = engine.upload_dev(&y)?;
+        let g_dev = engine.upload_dev(&g)?;
+        let dx_dev = engine.softmax_bwd_dev(&y_dev, &g_dev, ROWS, D)?;
+        let actual = engine.download_dev(&dx_dev)?;
+        let max_err = actual
+            .iter()
+            .zip(&expected)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        println!("softmax backward ZSL workgroup max err: {max_err}");
+
+        engine.free_dev(y_dev);
+        engine.free_dev(g_dev);
+        engine.free_dev(dx_dev);
+        assert!(max_err < 1e-4, "max error {max_err} exceeded tolerance");
+        Ok(())
+    }
+
+    #[test]
+    fn layernorm_zsl_workgroup_reduce_matches_cpu_reference() -> Result<()> {
+        unsafe {
+            std::env::set_var("ZEN_FORCE_ZSL", "1");
+        }
+        let engine = match ZenEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => {
+                println!("skipping layernorm_zsl_workgroup_reduce_matches_cpu_reference: {error}");
+                return Ok(());
+            }
+        };
+        if engine.backend() != BackendPreference::Hip {
+            println!(
+                "skipping layernorm_zsl_workgroup_reduce_matches_cpu_reference: HIP backend unavailable"
+            );
+            return Ok(());
+        }
+
+        const ROWS: usize = 37;
+        const D: usize = 200;
+        const EPS: f32 = 1e-5;
+        let x: Vec<f32> = (0..ROWS * D)
+            .map(|i| (i as f32 * 0.019).sin() * 2.5 + (i % 11) as f32 * 0.03)
+            .collect();
+        let gamma: Vec<f32> = (0..D)
+            .map(|j| 0.75 + (j as f32 * 0.023).cos() * 0.2)
+            .collect();
+        let beta: Vec<f32> = (0..D).map(|j| (j as f32 * 0.031).sin() * 0.15).collect();
+        let mut expected_out = vec![0.0; x.len()];
+        let mut expected_xhat = vec![0.0; x.len()];
+        let mut expected_invstd = vec![0.0; ROWS];
+        for r in 0..ROWS {
+            let base = r * D;
+            let mut mean = 0.0;
+            for j in 0..D {
+                mean += x[base + j];
+            }
+            mean /= D as f32;
+            let mut var = 0.0;
+            for j in 0..D {
+                let delta = x[base + j] - mean;
+                var += delta * delta;
+            }
+            var /= D as f32;
+            let invstd = 1.0 / (var + EPS).sqrt();
+            expected_invstd[r] = invstd;
+            for j in 0..D {
+                let h = (x[base + j] - mean) * invstd;
+                expected_xhat[base + j] = h;
+                expected_out[base + j] = h * gamma[j] + beta[j];
+            }
+        }
+
+        let x_dev = engine.upload_dev(&x)?;
+        let gamma_dev = engine.upload_dev(&gamma)?;
+        let beta_dev = engine.upload_dev(&beta)?;
+        let (out_dev, xhat_dev, invstd_dev) =
+            engine.layernorm_dev(&x_dev, &gamma_dev, &beta_dev, ROWS, D, EPS)?;
+        let actual_out = engine.download_dev(&out_dev)?;
+        let actual_xhat = engine.download_dev(&xhat_dev)?;
+        let actual_invstd = engine.download_dev(&invstd_dev)?;
+        let out_max_err = actual_out
+            .iter()
+            .zip(&expected_out)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        let xhat_max_err = actual_xhat
+            .iter()
+            .zip(&expected_xhat)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        let invstd_max_err = actual_invstd
+            .iter()
+            .zip(&expected_invstd)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        println!(
+            "layernorm ZSL workgroup max errs: out={out_max_err}, xhat={xhat_max_err}, invstd={invstd_max_err}"
+        );
+
+        engine.free_dev(x_dev);
+        engine.free_dev(gamma_dev);
+        engine.free_dev(beta_dev);
+        engine.free_dev(out_dev);
+        engine.free_dev(xhat_dev);
+        engine.free_dev(invstd_dev);
+        assert!(
+            out_max_err < 1e-4,
+            "out max error {out_max_err} exceeded tolerance"
+        );
+        assert!(
+            xhat_max_err < 1e-4,
+            "xhat max error {xhat_max_err} exceeded tolerance"
+        );
+        assert!(
+            invstd_max_err < 1e-4,
+            "invstd max error {invstd_max_err} exceeded tolerance"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn layernorm_bwd_zsl_workgroup_reduce_matches_cpu_reference() -> Result<()> {
+        unsafe {
+            std::env::set_var("ZEN_FORCE_ZSL", "1");
+        }
+        let engine = match ZenEngine::new() {
+            Ok(engine) => engine,
+            Err(error) => {
+                println!(
+                    "skipping layernorm_bwd_zsl_workgroup_reduce_matches_cpu_reference: {error}"
+                );
+                return Ok(());
+            }
+        };
+        if engine.backend() != BackendPreference::Hip {
+            println!(
+                "skipping layernorm_bwd_zsl_workgroup_reduce_matches_cpu_reference: HIP backend unavailable"
+            );
+            return Ok(());
+        }
+
+        const ROWS: usize = 37;
+        const D: usize = 200;
+        const EPS: f32 = 1e-5;
+        let x: Vec<f32> = (0..ROWS * D)
+            .map(|i| (i as f32 * 0.019).sin() * 2.5 + (i % 11) as f32 * 0.03)
+            .collect();
+        let gamma: Vec<f32> = (0..D)
+            .map(|j| 0.75 + (j as f32 * 0.023).cos() * 0.2)
+            .collect();
+        let g: Vec<f32> = (0..ROWS * D)
+            .map(|i| (i as f32 * 0.029).cos() * 1.3)
+            .collect();
+        let mut xhat = vec![0.0; x.len()];
+        let mut invstd = vec![0.0; ROWS];
+        for r in 0..ROWS {
+            let base = r * D;
+            let mut mean = 0.0;
+            for j in 0..D {
+                mean += x[base + j];
+            }
+            mean /= D as f32;
+            let mut var = 0.0;
+            for j in 0..D {
+                let delta = x[base + j] - mean;
+                var += delta * delta;
+            }
+            var /= D as f32;
+            invstd[r] = 1.0 / (var + EPS).sqrt();
+            for j in 0..D {
+                xhat[base + j] = (x[base + j] - mean) * invstd[r];
+            }
+        }
+
+        let mut expected_dx = vec![0.0; x.len()];
+        let mut expected_dgamma = vec![0.0; D];
+        let mut expected_dbeta = vec![0.0; D];
+        for r in 0..ROWS {
+            let base = r * D;
+            let mut md = 0.0;
+            let mut mdx = 0.0;
+            for j in 0..D {
+                let dh = g[base + j] * gamma[j];
+                md += dh;
+                mdx += dh * xhat[base + j];
+            }
+            md /= D as f32;
+            mdx /= D as f32;
+            for j in 0..D {
+                let dh = g[base + j] * gamma[j];
+                expected_dx[base + j] = invstd[r] * (dh - md - xhat[base + j] * mdx);
+                expected_dgamma[j] += g[base + j] * xhat[base + j];
+                expected_dbeta[j] += g[base + j];
+            }
+        }
+
+        let g_dev = engine.upload_dev(&g)?;
+        let xhat_dev = engine.upload_dev(&xhat)?;
+        let invstd_dev = engine.upload_dev(&invstd)?;
+        let gamma_dev = engine.upload_dev(&gamma)?;
+        let (dx_dev, dgamma_dev, dbeta_dev) =
+            engine.layernorm_bwd_dev(&g_dev, &xhat_dev, &invstd_dev, &gamma_dev, ROWS, D)?;
+        let actual_dx = engine.download_dev(&dx_dev)?;
+        let actual_dgamma = engine.download_dev(&dgamma_dev)?;
+        let actual_dbeta = engine.download_dev(&dbeta_dev)?;
+        let dx_max_err = actual_dx
+            .iter()
+            .zip(&expected_dx)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        let dgamma_max_err = actual_dgamma
+            .iter()
+            .zip(&expected_dgamma)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        let dbeta_max_err = actual_dbeta
+            .iter()
+            .zip(&expected_dbeta)
+            .map(|(actual, expected)| (actual - expected).abs())
+            .fold(0.0_f32, f32::max);
+        println!(
+            "layernorm backward ZSL workgroup max errs: dx={dx_max_err}, dgamma={dgamma_max_err}, dbeta={dbeta_max_err}"
+        );
+
+        engine.free_dev(g_dev);
+        engine.free_dev(xhat_dev);
+        engine.free_dev(invstd_dev);
+        engine.free_dev(gamma_dev);
+        engine.free_dev(dx_dev);
+        engine.free_dev(dgamma_dev);
+        engine.free_dev(dbeta_dev);
+        assert!(
+            dx_max_err < 1e-4,
+            "dx max error {dx_max_err} exceeded tolerance"
+        );
+        assert!(
+            dgamma_max_err < 1e-3,
+            "dgamma max error {dgamma_max_err} exceeded tolerance"
+        );
+        assert!(
+            dbeta_max_err < 1e-3,
+            "dbeta max error {dbeta_max_err} exceeded tolerance"
+        );
         Ok(())
     }
 

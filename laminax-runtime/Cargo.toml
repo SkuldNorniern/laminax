@@ -10,7 +10,13 @@ workspace = true
 # HIP (ROCm) + Vulkan backends. CUDA is intentionally omitted: zengpu-cuda emits
 # `-lnvrtc -lcuda` link flags that break binaries on non-NVIDIA hosts. Re-add
 # `zengpu/cuda` only where the CUDA toolkit is present.
-gpu = ["dep:zengpu", "dep:zengpu-spirv", "zengpu/hip", "zengpu/vulkan"]
+gpu = [
+    "dep:zengpu",
+    "dep:zengpu-spirv",
+    "zengpu/hip",
+    "zengpu/vulkan",
+    "zengpu-spirv/hip",
+]
 # CPU AOT JIT path (aot.rs): lowers LCIR → Lamina IR → MIR → native code via lamina.
 # Kept optional because it pulls the `lamina` toolchain (and `lamina-ras`); the GPU
 # ZenEngine path does not need it.
